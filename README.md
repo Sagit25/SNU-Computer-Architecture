@@ -1,247 +1,360 @@
 # 4190.308 Computer Architecture (Fall 2022)
 
-# Project #1: Simplified Image Compression
+# Project #2: FP Addition
 
-### Due: 11:59PM, September 18 (Sunday)
-
+### Due: 11:59PM, October 16 (Sunday)
 
 ## Introduction
 
-In this project, you need to perform a simplified image compression on the given grayscale image in memory. The purpose of this project is to make you familiar with the binary representation of integers and the bit-level operations supported in the C programming language. Another goal is to make your Linux or MacOS development environment ready and to get familiar with our project submission server.
+The goal of this project is to get familiar with the IEEE 754 floating-point standard by implementing the addition of two floating-point numbers using integer arithmetic. Specificially, this project focuses on a variation of the 16-bit floating-point format, called SnuFloat16 (or `SFP16` for short).
 
-## Background
+## SnuFloat16 (or `SFP16`) Representation
 
-### Grayscale Image
-
-A pixel in a grayscale image represents only an amount of light, ranging from black at the weakest intensity to white at the strongest. Today, grayscale images intended for visual display are commonly quantized to unsigned integers with 8 bits per pixel. This pixel depth allows 256 different intensities from black (value 0) to white (value 255). This also simplifies computation as each pixel sample can be accessed individually as one full byte. 
-
-### PNG Filtering
-
-The PNG file format supports a precompression step called filtering. Filtering is a method of reversibly transforming the image data so that the main compression engine can operate more efficiently. As a simple example, suppose that the byte sequence increases uniformly from 1 to 255. Because there is no repetition in the sequence, it is either very poor or not compressed at all. However, a minor modification of the sequence (i.e., leaving the first byte alone but replacing each subsequent byte with the difference from the previous byte) transforms the sequence into a highly compressible set of 255 identical bytes, each having the value 1. In this project, we will use a simplified _Paeth filtering_ algorithm in the PNG format. For more details on PNG filtering, please refer to https://www.w3.org/TR/PNG-Filters.html
-
-## Our Simplified Image Compression
-
-Our simplified image compression scheme consists of two phases. In the first phase, we apply a simplified Paeth filtering algorithm to reduce the range of pixel values. In the second phase, we encode those values in a more compact binary representation.
-
-
-### Phase 1: Simplified Paeth Filtering
-
-The basic idea behind the Paeth filtering is to record only the difference from the neighboring pixel values because the value of a pixel changes gradually in most cases. Our simplified Paeth filtering algorithm works as follows. 
-
-1. First, find the average of the three negiboring pixels in left, upper, and upper-left positions. When the neighboring pixel does not exist, exclude it from the calculation. 
-Let us assume that `S[H][W]` represents an array of the pixel values of the input image where `H` indicates the number of rows and `W` the number of columns. The following shows how to get the average value `Avg[i][i]` for `S[i][j]`.
-
+`SFP16` is a 16-bit floating-point representation that follows the IEEE 754 standard for floating-point arithmetic. The overall structure of the `SFP16` representation is shown below. The MSB (Most Significant Bit) is used as a sign bit (`S`). The next seven bits are used for the exponent (`E`) with a bias value of 63. The last eight bits are used for the fraction (`F`). The rules for normalized / denormalized values and the representation of zero, infinity, and NaN are all the same as in the IEEE standard. For rounding, we use the **round-to-even** mode.
 ```
-Avg[i][j] = 0                                            if i == 0 and j == 0,
-            S[i-1][j]                                    if i != 0 and j == 0,
-            S[i][j-1]                                    if i == 0 and j != 0,
-            (S[i][j-1] + S[i-1][j] + S[i-1][j-1]) / 3    otherwise
-            where 0 <= i < H and 0 <= j < W
+bit 15 14 13 12 11 10 9  8  7  6  5  4  3  2  1  0
+    S  E  E  E  E  E  E  E  F  F  F  F  F  F  F  F
+    ^  +--------+--------+  +----------+---------+
+    |           |                      |                       
+Sign bit        |              Fraction (8 bits)
+         Exponent (7 bits)                   
 ```
 
-Let's see an example. The following figure shows a 3x4 grayscale image where each pixel value (in decimal) is shown in the corresponding pixel.
+Note that the smallest positive number in the `SFP16` format is 0.00000001 x 2<sup>-62</sup> and the largest positive number is 1.11111111 x 2<sup>63</sup>.
 
-<img src="https://github.com/snu-csl/ca-pa1/blob/main/sample.png?raw=true" alt="sample image" style="width:200px;">
-
-```
-Original image S[3][4]:
-    0    0    0    0
-   50   75  100  120
-   75  100  120    0
-```
-```
-Avg[3][4]:
-    0    0    0    0
-    0   16   25   33
-   50   66   91  113
-``` 
-
-2. Get the filtered value by computing the difference between the actual pixel value and the average value, i.e. `S[i][j] - Avg[i][j]`. Note that the difference can be a negative value when `S[i][j] < Avg[i][j]`. In this case, we add 256 to `S[i][j]` before subtracting `Avg[i][j]` to ensure that all filtered values are positive. To summarize, the filtered value `Filter[i][j]` can be obtained as follows:
+In C, we use a 16-bit unsigned short integer to store the `SFP16` representation. Hence, the new type `SFP16` is defined as follows.
 
 ```
-Filter[i][j] = S[i][j] - Avg[i][j]          if S[i][j] >= Avg[i][j],
-               S[i][j] + 256 - Avg[i][j]    otherwise
+typedef unsigned short SFP16;
 ```
 
-In the previous example, `Filter[3][4]` can be obtained as follows.
+## FP Addition 
 
+This section briefly overviews the required steps for adding two floating-point numbers. Let `x` and `y` be the two `SFP16`-type numbers to be added and `p` be the number of bits allocated for the fraction (i.e., `p` = 8 for the `SFP16` format). The notations E<sub>x</sub> and M<sub>x</sub> are used for the exponent and significand of `x` where M<sub>x</sub> has an explicit leading bit (0 or 1). Likewise, E<sub>y</sub> and M<sub>y</sub> are used for the exponent and significand of `y`. We also use the notation S<sub>x</sub> to represent the sign bit of `x` which is either 0 or 1. For example, when `x` has the bit pattern of `0b0100100111010010` (= 1.11010010 x 2<sup>10</sup>), M<sub>x</sub> = 1.11010010, E<sub>x</sub> = 10, and S<sub>x</sub> = 0. Therefore, the value of `x` can be represented as `x` = (-1)<sup>S<sub>x</sub></sup> * M<sub>x</sub> * 2<sup>E<sub>x</sub></sup>. 
+
+1. If `|x|` < `|y|`, swap the operands. This ensures that the difference of the exponents satisfies `d` = E<sub>x</sub> - E<sub>y</sub> >= 0. In case `d` == 0 (i.e. E<sub>x</sub> == E<sub>y</sub>), this also ensures M<sub>x</sub> >= M<sub>y</sub>. 
+
+2. Shift right M<sub>y</sub> by `d` bits and increment E<sub>y</sub> by `d` so that E<sub>y</sub> == E<sub>x</sub>.
+
+3. If the signs of `x` and `y` are same, compute a preliminary significand `M` by adding M<sub>y</sub> to M<sub>x</sub> using the integer arithmetic. If the signs of `x` and `y` are different, subtract M<sub>y</sub> from M<sub>x</sub>. Also, set the exponent `E` and the sign bit `S` of the result such that `E` = E<sub>x</sub> and `S` = S<sub>x<sub>.
+
+4. Normalize the preliminary significand `M` by shifting left or right until there is only one non-zero bit before the binary point. As you shift `M` to the right by one bit, you need to increment `E` by one. When you shift left `M` to the left by one bit, `E` should be decremented by one. Note that sometimes `M` should be represented as a denormalized form in which case there will be 0 before the binary point.
+
+5. After the normalization, if `M` has any non-zero bits beyond `p` bits after the binary point, it should be rounded according to the __rounding-to-even__ mode.
+
+6. As a result of the rounding, it is possible that `M` is no longer in a normalized form, in which case you need to perform the normalization and rounding again.
+
+7. Now the result value will be (-1)<sup>S</sup> * M * 2<sup>E</sup> and encode this value into binary numbers according to the `SFP16` format.
+
+### Example 1
+
+Let `x` = 0x17f2 and `y` = 0x154f be the two floating-point numbers in the `SFP16` representation.
 ```
-Filter[3][4]:
-    0    0    0    0    
-   50   59   75   87   
-   25   34   29  143   
-``` 
-
-Note that the original pixel value 0 is smaller that the average value 113 in the last pixel at `S[2][3]`. In this case, the difference should be -113 so that we can restore the original value using the sum of the average value and the filtered value such that 113 + (-113) = 0. However, we have added 256 to 0 and used the value 0 + 256 - 113 = 143 as the filtered value to make it positive. Even though this looks strange, we have no problem in restoring the original pixel value by obtaining only the lower 8 bits of the sum: i.e., (113 + 143) % 256 = 0. 
-
-### Phase 2: Encoding Filtered Values
-
-Once we get the filtered values, we encode those values as compact as possible. Since the filtered values usually have a smaller range, we can encode them using the smaller number of bits compared to the original pixel values. In order to encode the filtered values, we use the base-delta encoding scheme for each row.
-
-3. Find the minimum and the maximum filtered values for each row. The minimum value will be used as the base value of the row and the deltas from the base value are calculated for each pixel in the given row. The following shows the base values and the deltas for each row in our example.
-
-```
-Filter[3][4]:                         
-    0    0    0    0     min:   0, max:   0   
-   50   59   75   87     min:  50, max:  87
-   25   34   29  143     min:  25, max: 143
-
-Delta[3][4]:
-   +0   +0   +0   +0     base(0): 0
-   +0   +9  +25  +37     base(1): 50
-   +0   +9  +4  +118     base(2): 25
-``` 
-
-4. Find the number of bits needed for representing the deltas in an unsigned integer format in each row. It can be calculated from the maximum delta value for each row. In the previous example, the second and the third row has the maximum delta value 37 and 118, respectively. For the second row, those delta values can be encoded using just 6 bits, while we need 7 bits for the third row. For the first row, all the delta values are same and we don't have to use additional bits to encode them. 
-
-For the row `i`, the number of bits `n(i)` needed to encode delta values with unsigned integers can be obtained as follows:
-```
-n(i) = 0        if max(Delta[i]) == 0,
-       1        else if max(Delta[i]) == 1,
-       2        else if max(Delta[i]) < 4,
-       3        else if max(Delta[i]) < 8,
-       4        else if max(Delta[i]) < 16,
-       5        else if max(Delta[i]) < 32,
-       6        else if max(Delta[i]) < 64,
-       7        else if max(Delta[i]) < 128,
-       8        otherwise
+         S EEE EEEE FFFF FFFF                          
+      x: 0 001 0111 1111 0010   Sx = 0, Mx = 1.11110010, Ex = 23 - bias = -40
+      y: 0 001 0101 0100 1111   Sy = 0, My = 1.01001111, Ey = 21 - bias = -42
 ```
 
-In our example, `n(i)` is calculated as shown below:
-```
-Delta[3][4]:
-   +0   +0   +0   +0     n(0) = 0
-   +0   +9  +25  +37     n(1) = 6
-   +0   +9  +4  +118     n(2) = 7
-``` 
+Since E<sub>y</sub> is smaller than E<sub>x</sub>, M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 2 bits. And then, M<sub>x</sub> and M<sub>y</sub> are added together. 
 
-5. Now we encode each row, one row at a time. The row `i` is encoded as follows.
-
-```
-|  Base value  | # of bits | 0-th Delta Value | ... | (W-1)-th Delta Value |
-|  base(i)     | n(i)      | Delta[i][0]      |     | Delta[i][W-1]        |
-|--------------|-----------|------------------|-----|----------------------|
-|   (8 bits)   | (4 bits)  |   (n(i) bits)    | ... |     (n(i) bits)      |
+```                               
+     Mx:  1.1111001000      ; Ex = -40
+   + My:  0.0101001111      ; Ey = -40
+      M: 10.0100010111      ; E  = -40,  S = 0
 ```
 
-There is a special case; when `n(i)` is zero, it means that all filtered values in the given row `i` are identical. In this case, encoding the delta values can be skipped. In other words, encoding the row `i` such that `n(i) == 0` is simplified as follows.
+The result `M` is not in a normalized form. So, `M` is shifted right and the exponent is incremented by 1, such that `M` = 1.00100010111 and `E` = -39.
+
+As `M` has 11 bits after the binary point, we need to truncate the trailing 3 bits (`111`) beyond the `p` (= 8) bits. In this case, we need to round up by adding 1 into the `p`-th bit. 
 
 ```
-|  Base value  | # of bits | 
-|  base(i)     | n(i)      | 
-|--------------|-----------|
-|   (8 bits)   | 0000      |
+      M: 10.0100010111      ; E  = -40 
+      M:  1.00100010111     ; E  = -39  (after normalization)
+      M:  1.00100011        ; E  = -39  (after rounding)
 ```
 
-For our example, each row is encoded as follows.
-```
-       base(i)  n(i) 
-Row 0: 00000000 0000
-Row 1: 00110010 0110 000000  001001  011001  100101
-Row 2: 00011001 0111 0000000 0001001 0000100 1110110 
-```
-
-6. If the total number of output bits is not a multiple of 8 after encoding, pad 0's until it becomes a multiple of 8. This is because byte is the smallest unit that can be stored in memory.
-
-Luckily, the total number of encoded bits in our example is already a multiple of 8, so we don't need any padding. The final encoded bytes can be written in hexadecimal numbers as follows:
+Now we encode the result `M` and `E` according to the `SFP16` representation. (`f` indicates the fraction bits and `e` is the exponent value after adding the bias.)
 
 ```
-Output: 0x00 0x03 0x26 0x00 0x96 0x65 0x19 0x70 0x02 0x42 0x76 (11 bytes)
+         S EEE EEEE FFFF FFFF                          
+    x+y: 0 001 1000 0010 0011    ; S = 0, f = 00100011, e = -39 + bias = 24
+         = 0x1823
+````
+    
+### Example 2 
+
+Let's look at another example where `x` = 0x8b00 and `y` = 0x0100. 
+
+```
+         S EEE EEEE FFFF FFFF                          
+      x: 1 000 1011 0000 0000   Sx = 1, Mx = 1.00000000, Ex = 11 - bias = -52
+      y: 0 000 0001 0000 0000   Sy = 0, My = 1.00000000, Ey = 1 - bias = -62
 ```
 
-## Problem specification
+Similar to the previous example, M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 10 bits. Since the signs of two input values differ, we need to subtract M<sub>y</sub> from M<sub>x</sub>. The sign of the result `S` will follow that of `x`, i.e., `S` = S<sub>x</sub> = 1. 
 
-Write the C function named `encode()` that encodes the input binary data using our simplified image compression scheme. The prototype of `encode()` is as follows:
+```                              
+     Mx:  1.0000000000        ; Ex = -52
+   - My:  0.0000000001        ; Ey = -52
+      M:  0.1111111111        ; E  = -52, S = 1
+```
+
+Since the result `M` is not in a normalized form, `M` is shifted left by one bit and `E` is decremented by one, such that `M` = 1.111111111 and `E` = -53.
+
+Now we perform the rounding. In this case, 1.111111111 is located in the middle of 1.11111111 and (1.11111111 + 0.00000001 or 10.00000000) and we need to round up to the even number 10.00000000 according to the round-to-even mode.
+
+As a result of this rounding, `M` is no longer in a normalized form and we have to normalize `M` again as follows.
 
 ```
-typedef unsigned char u8;
-int encode(const u8* src, const int width, const int height, u8* dst);
+      M:  0.1111111111        ; E  = -52
+      M:  1.111111111         ; E  = -53  (after normalization)
+      M: 10.00000000          ; E  = -53  (after rounding)
+      M:  1.00000000          ; E  = -52  (after re-normalization)
 ```
 
-The first argument `src` points to the memory address of the input data. The width and height of the input data (in bytes) are specified in the second argument `width` and third `height`, respectively. The encoded result should be stored in the memory that starts from the address pointed to by `dst`.
+You can see that the final result of the addition is actually same as `x`.
 
-The function `encode()` returns the actual length of the output in bytes including the encoded data and padded bits. When `width` or `height` is zero, `encode()` returns zero. You can safely assume that a sufficient amount of memory is already allocated for the buffer designated by `dst`. However, the contents of the buffer after the encoded output should not be corrupted in any case.
+```
+         S EEE EEEE FFFF FFFF                          
+    x+y: 1 000 1011 0000 0000    ; S = 1, f = 11011110, e = -52 + bias = 11
+         = 0x8b00
+````
 
+## FP Addition using Guard, Round, and Sticky Bits
+
+Typically, a floating-point operation takes two inputs `x` and `y` with `p` bits of fraction and returns a `p`-bit result. The ideal algorithm would compute this by first performing the operation exactly, and then rounding the result to `p` bits. The floating-point addition algorithm presented in the previous section follows this strategy. In this case, however, we need a very wide adder and also very long registers to compute and keep the intermediate result. This is true especially when the difference (`d`) in the exponents of the two inputs is very large because the smaller value should be shifted to the right by `d` bits.
+
+Fortunately, we can produce the same result by maintaining only three extra bits, namely guard (G), round (R), and sticky (S) bits. These bits are added (or subtracted) together along with the other `p` bits, and they are also used for normalization and rounding. The floating-point addition with the guard, round, and sticky bits is proceeded as follows.
+
+1. If `|x|` < `|y|`, swap the operands. 
+
+2. Now we extend M<sub>x</sub> and M<sub>y</sub> to include the extra three bits (G, R, and S bits) after the `p`-bit fraction. Those bits are initialized to zeroes. And then we shift right M<sub>y</sub> by `d` = E<sub>x</sub> - E<sub>y</sub> bits. From the bits shifted out beyond the `p` bits, we set the guard bit to the most significant bit (i.e., (`p`+1)-th bit), the round bit to the next most significant bit (i.e., (`p`+2)-th bit), and sticky bit to the OR of the rest.
+
+3. If the signs of `x` and `y` are same, compute a preliminary significand `M` by adding M<sub>y</sub> to M<sub>x</sub> using the integer arithmetic. If the signs of `x` and `y` are different, subtract M<sub>y</sub> from M<sub>x</sub>. Also, set the exponent `E` and the sign bit `S` of the result such that `E` = E<sub>x</sub> and `S` = S<sub>x<sub>.
+
+4. Normalize the preliminary significand `M`. Whenever `M` is shifted left, those G, R, and S bits are shifted together as if they were part of the normal fraction bits, filling the sticky bit with zero. Likewise, whenever `M` is shifted right during the normalization step, G, R, and S bits are updated as follows (assuming `b` is the new bit shifted out beyond the `p` bits):
+   ```
+      S_bit <- S_bit | R_bit
+      R_bit <- G_bit
+      G_bit <- b
+   ```
+   In any case, the exponent of the result, `E`, should be adjusted accordingly.
+
+5. The next step is to perform rounding. The main role of the guard bit is to fill in the least-significant bit (`p`-th bit) of the result when necessary. Depending on the situation, the original guard bit in the step 3 may have moved to the left or right direction during normalization. But in any case, the role of the guard bit is over after the normalization step. Hence, we adjust the round bit and the sticky bit as follows:
+   ```
+      S_bit <- S_bit | R_bit
+      R_bit <- G_bit
+   ```
+
+   This is because, when it comes to the rounding, what really matters is the discarded bits. We set the round bit to the previous guard bit because it is the first bit among the discarded bits. We also update the sticky bit to include the status of the previous round bit. 
+
+   Using the updated round bit and the sticky bit, we perform rounding according to the round-to-even mode: if (R_bit &and; S_bit) &or; (L_bit &and; R_bit), round up, otherwise round down. (Here, L_bit means the last bit of the fraction, i.e., `p`-th bit.)
+
+6. Perform the normalization and rounding again if necessary.
+
+7. Encode the result into binary numbers according to the `SFP16` format.
+
+
+### Example 1 (revisited)
+
+Let `x` = 0x17f2 and `y` = 0x154f are the two floating-point numbers in the `SFP16` representation.
+```
+         S EEE EEEE FFFF FFFF                          
+      x: 0 001 0111 1111 0010   Sx = 0, Mx = 1.11110010, Ex = 23 - bias = -40
+      y: 0 001 0101 0100 1111   Sy = 0, My = 1.01001111, Ey = 21 - bias = -42
+```
+
+M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 2 bits. And then, M<sub>x</sub> and M<sub>y</sub> are added together. We set the G, R, and S bits as follows:
+
+```                         
+                     GRS      
+     Mx:  1.11110010 000    ; Ex = -40
+   + My:  0.01010011 110    ; Ey = -40
+      M: 10.01000101 110    ; E  = -40,  S = 0
+```
+
+The result `M` is not in a normalized form. So, `M` is shifted right and the exponent is incremented by 1, such that `M` = 1.00100010 (with GRS=111) and `E` = -39.
+
+Now, we perform the rounding by setting the R_bit to 1 (the previous G bit), and the S_bit to 1 (previous R_bit | S_bit). This is a round-up condition, so we add 1 into the `p`-th bit.  
+
+```
+                     GRS
+      M: 10.01000101 110    ; E  = -40 
+      M:  1.00100010 111    ; E  = -39  (after normalization)
+                     RS
+      M:  1.00100010 11     ; E  = -39  (update RS for rounding)
+      M:  1.00100011        ; E  = -39  (after rounding)
+```
+
+Now we encode the result `M` and `E` according to the `SFP16` representation. (`f` indicates the fraction bits and `e` is the exponent value after adding the bias.)
+
+```
+         S EEE EEEE FFFF FFFF                          
+    x+y: 0 001 1000 0010 0011    ; S = 0, f = 00100011, e = -39 + bias = 24
+         = 0x1823
+````
+
+   
+### Example 2 (revisited)
+
+Let's look at the previous example again where `x` = 0x8b00 and `y` = 0x0100. 
+
+```
+         S EEE EEEE FFFF FFFF                          
+      x: 1 000 1011 0000 0000   Sx = 1, Mx = 1.00000000, Ex = 11 - bias = -52
+      y: 0 000 0001 0000 0000   Sy = 0, My = 1.00000000, Ey = 1 - bias = -62
+```
+
+M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 10 bits, setting the G, R, and S bits accordingly.  Since the signs of two input values differ, we need to subtract M<sub>y</sub> from M<sub>x</sub> in this case. The sign of the result `S` will follow that of `x`, i.e., `S` = S<sub>x</sub> = 1. 
+
+```                   
+                     GRS           
+     Mx:  1.00000000 000      ; Ex = -52
+   - My:  0.00000000 010      ; Ey = -52
+      M:  0.11111111 110      ; E  = -52, S = 1
+```
+
+Since the result `M` is not in a normalized form, the guard bit is moved into the fraction, decrementing `E` by one, such that `M` = 1.11111111 (with GRS=100) and `E` = -53.
+
+For rounding, we update the R_bit to 1 and the S_bit to 0. Because (L_bit &and; R_bit) is true, we round up making `M` = 10.00000000 with `E` = -53. After renormalization, we get `M` = 1.00000000 and `E` = -52. 
+
+```
+                     GRS
+      M:  0.11111111 110      ; E  = -52
+      M:  1.11111111 100      ; E  = -53  (after normalization)
+                     RS
+      M:  1.11111111 10       ; E  = -53  (update RS for rounding)
+      M: 10.00000000          ; E  = -53  (after rounding)
+      M:  1.00000000          ; E  = -52  (after re-normalization)
+```
+
+The final result is encoded as follows:
+
+```
+         S EEE EEEE FFFF FFFF                          
+    x+y: 1 000 1011 0000 0000    ; S = 1, f = 11011110, e = -52 + bias = 11
+         = 0x8b00
+````
+
+## Problem Specification
+
+Your task is to implement the following C function `fpadd()` that returns the sum (`x` + `y`) of the two floating-point numbers, `x` and `y`, represented in the `SFP16` format. The return value should be also represented in the `SFP16` format. Any of the input can be a negative value.
+
+```
+typedef unsigned short SFP16;
+SFP16 fpadd(SPF16 x, SPF16 y);
+```
+
+* Your implementation should make use of the three extra bits (guard, round, and sticky bits) without retaining the unnecessary fraction bits.
+
+* We do not distinguish between +0 and -0. When the result is zero, you can return any bit pattern corresponding to +0 (0x0000) or -0 (0x8000).
+
+* For NaN (Not-a-Number), we only allow the bit pattern where the fractional part is 0b00000001. Hence, +NaN and -NAN are encoded as 0x7f01 and 0xff01, respectively. When one of the inputs is NaN, you can assume that it has the bit pattern of 0x7f01 or 0xff01, and nothing else. 
+
+* We do not distinguish between +NaN and -NaN. When the result is NaN, you can return any of them. 
+
+* We DO however distinguish between +inf (0x7f00) and -inf (0xff00). When the result becomes too large to be represented, it should be converted to either +inf or -inf depending on its sign. 
+
+* For special cases where +inf/-inf, +0/-0, and +NaN/-NAN are involved, the return value should be the same as the one shown in the following table.
+
+   ```
+        y:    +inf   -inf    nan    zero   other
+    x:     
+     +inf     +inf    nan    nan    +inf   +inf
+     -inf      nan   -inf    nan    -inf   -inf
+      nan      nan    nan    nan     nan    nan
+      zero    +inf   -inf    nan     zero
+      other   +inf   -inf    nan
+   ```
 
 ## Skeleton code
 
-We provide you with the skeleton code for this project. It can be downloaded from Github at https://github.com/snu-csl/ca-pa1/. If you don't have the `git` utility, you need to install it first. You can install the `git` utility on Ubuntu by running the following command:
+We provide you with the skeleton code for this project. It can be download from Github at https://github.com/snu-csl/ca-pa2/. To download and build the skeleton code, please follow these steps:
 
 ```
-$ sudo apt install git
-```
-
-For MacOS, install the Xcode command line tools which come with `git`.
-
-To download and build the skeleton code, please follow these steps:
-
-```
-$ git clone https://github.com/snu-csl/ca-pa1.git
-$ cd ca-pa1
+$ git clone https://github.com/snu-csl/ca-pa2.git
+$ cd ca-pa2
 $ make
-gcc -g -O2 -Wall    -c -o main.o main.c
-gcc -g -O2 -Wall    -c -o pa1.o pa1.c
-gcc -o pa1 main.o pa1.o
+gcc -g -O2 -Wall   -c -o pa2.o pa2.c
+gcc -g -O2 -Wall   -c -o pa2-test.o pa2-test.c
+gcc -o pa2 pa2.o pa2-test.o
 ```
 
 The result of a sample run looks like this:
+
 ```
-$ ./pa1
--------- Test #0 Encoding
-[Input] width (bytes): 4, height (bytes): 3
-0x00, 0x00, 0x00, 0x00,
-0x32, 0x4b, 0x64, 0x78,
-0x4b, 0x64, 0x78, 0x00,
-[Encode] length (bytes): 0
-
-[Answer] length (bytes): 11
-0x00, 0x03, 0x26, 0x00, 0x96, 0x65, 0x19, 0x70, 0x02, 0x42,
-0x76,
--------- ENCODING WRONG! 2
-
--------- Test #1 Encoding
-[Input] width (bytes): 10, height (bytes): 5
-0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-[Encode] length (bytes): 0
-
-[Answer] length (bytes): 45
-0x00, 0x8f, 0xf0, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x07, 0x01, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x01, 0xc0, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x80, 0x1a, 0xb0, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x00, 0x00,
--------- ENCODING WRONG! 2
-
-(... more test cases below ...)
+$ ./pa2
+-------- NORM + NORM --------
+test 0: Wrong
+test 1: Wrong
+test 2: Wrong
+test 3: Wrong
+-------- NORM + DENORM ------
+test 0: Wrong
+test 1: Wrong
+test 2: Wrong
+test 3: Wrong
+------ DENORM + DENORM ------
+test 0: Wrong
+test 1: Wrong
+test 2: Wrong
+test 3: Wrong
+--------- INF / NAN ---------
+test 0: Wrong
+test 1: Wrong
+test 2: Wrong
+test 3: Wrong
 ```
+
+You are required to complete the `fpadd()` function in the `pa2.c` file.
+
+## Grading Guideline
+
+The following shows the types of test cases and their relative points during grading. 
+
+* Normal + Normal values
+  * Addition (15 points)
+  * Subtraction (15 points)
+* Denormal + Denormal values
+  * Addition (15 points)
+  * Subtraction (15 points) 
+* Normal + Denormal values
+  * Addition (15 points)
+  * Subtraction (15 points)
+* Handling of special values (10 points)
+
 
 ## Restrictions
 
-* You are not allowed to use any array even in the comment lines. Any source file that contains the symbol `[` or `]` will be rejected by the server. 
-
-* Do not include any header file in the `pa1.c` file. You are not allowed to use any library functions (including `printf()`) inside the `pa1.c` file. 
-
-* Your solution should finish within a reasonable time. If your code does not finish within a predefined threshold (e.g., 5 sec), it will be killed.
+- You are not allowed to use any array.
+- You are not allowed to use floating-point data types such as `float` and `double`.
+- You are not allowed to use any integer data type whose bit width is greater than 16 bits (e.g., `int`, `long`, `long long` etc.).
+- If your implementation violates the intention of this project assignment, you will get penalty (e.g., simulating an array using a bunch of local or global variables, etc.).
+- The following is the list of symbols and keywords that are not allowed. Any source file that contains one or more of them (even in the comment lines) will be rejected by the server.
+   ```
+   [, ], int, long, float, double, struct, union, static
+   ``` 
+- Do not include any header file in the `pa2.c` file.
+- Your `pa2.c` file should not contain any external library functions including `printf()`. Please remove them before you submit your code to the server.
+- Your code should finish within a reasonable time. We will measure the time to perform a certain number of operations. If your code does not finish within a predefined threshold (e.g., 5 sec), it will be killed.
 
 
 ## Hand in instructions
 
-* In order to submit your solution, you need to register an account to the submission server at https://sys.snu.ac.kr
-  * You must enter your real name & student ID
-  * Wait for an approval from the TA
-* Note that the submission server is only accessible inside the SNU campus network. If you want off-campus access to the submission server, please submit your IP through Google Form (https://forms.gle/rbWD2ZV2mAxRT1Ar5)
-* Upload only the `pa1.c` file to the submission server
+- Submit only the `pa2.c` file to the submission server.
+
+- The submitted code will NOT be graded instantly. Instead, it will be graded twice a day at noon and midnight. You may submit multiple versions, but only the last version submitted before 12:00pm or 12:00am will be graded.
 
 ## Logistics
 
-* You will work on this project alone.
-* Only the upload submitted before the deadline will receive the full credit. 25% of the credit will be deducted for every single day delay.
-* __You can use up to 4 _slip days_ during this semester__. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server __after__ each submission. Saving the slip days for later projects is highly recommended!
-* Any attempt to copy others' work will result in heavy penalty (for both the copier and the originator). Don't take a risk.
+- You will work on this project alone.
+- Only the upload submitted before the deadline will receive the full credit. 25% of the credit will be deducted for every single day delay.
+- **You can use up to 4 *slip days* during this semester**. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server after each submission. Saving the slip days for later projects is highly recommended!
+- Any attempt to copy others’ work will result in heavy penalty (for both the copier and the originator). Don’t take a risk.
+
+## Reference
+
+[1] David Goldberg, "Appendix J: Computer Arithmetic," _Computer Architecture: A Quantitative Approach_, 6th Edition, Morgan Kaufmann, 2019.
 
 Have fun!
 
