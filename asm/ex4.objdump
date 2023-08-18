@@ -1,0 +1,12 @@
+
+ex4:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+80000000 <_start>:
+80000000:	00000263          	beqz	zero,80000004 <L0>
+
+80000004 <L0>:
+80000004:	00100293          	li	t0,1
+80000008:	00100073          	ebreak

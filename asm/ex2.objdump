@@ -1,0 +1,12 @@
+
+ex2:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+80000000 <_start>:
+80000000:	80020137          	lui	sp,0x80020
+80000004:	0200006b          	push	zero
+80000008:	040002eb          	pop	t0
+8000000c:	0250006b          	push	t0
+80000010:	00100073          	ebreak

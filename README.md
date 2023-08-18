@@ -1,289 +1,281 @@
 # 4190.308 Computer Architecture (Fall 2022)
-# Project #3: Image Resizing in the RISC-V Assembly Language
-### Due: 11:59PM, November 20 (Sunday)
+# Project #4: Extending a 5-stage Pipelined RISC-V Processor
+### Due: 11:59PM, December 18 (Sunday)
 
 
 ## Introduction
 
-In this project, you will implement an image resizing program using the 32-bit RISC-V (RV32I) assembly language. An image file in the BMP format will be given as an input. The goal of this project is to give you an opportunity to practice the RISC-V assembly programming. In addition, this project introduces various RISC-V tools that help you compile and run your RISC-V programs.
+The goal of this project is to understand how a pipelined processor works. In this project, you need to extend the existing 5-stage pipelined RISC-V simulator to support new instructions and a branch prediction scheme using the branch target buffer (BTB). 
 
-## Backgrounds
+## Background: A 5-stage pipelined RISC-V processor (`snurisc5`)
 
-### RGB color model
+The target RISC-V processor `snurisc5` consists of five pipeline stages: IF, ID, EX, MM, and WB. The following briefly summarizes the tasks performed in each stage:
 
-[<img align="right" width="150" src="https://upload.wikimedia.org/wikipedia/commons/c/c2/AdditiveColor.svg?sanitize=true">](https://en.wikipedia.org/wiki/RGB_color_model)
+* IF: Fetches an instruction from imem (instruction memory)
+* ID: Decodes the instruction, reads register files, and prepares immediate values
+* EX: Performs arithmetic/logical computation and determines the branch outcome
+* MM: Accesses dmem (data memory), if necessary
+* WB: Writes back the result to the register file and updates `pc`
 
-The RGB color model is one of the most common ways to encode color images in the digital world. The RGB color model is based on the theory that all visible colors can be created using the primary additive colors: red, green, and blue. When two or three of them are combined in different amounts, other colors are produced. The RGB color model is important to graphic design as it is used in computer monitors.
-
-### BMP file format
-
-The BMP file format is an image file format used to store digital images, especially on Microsoft Windows operating systems. A BMP file contains a BMP file header, a bitmap information header, an optional color palette, and an array of bytes that defines the bitmap data. Since the BMP file format has been extended several times, it supports different types of encoding modes. For example, image pixels can be stored with a color depth of 1 (black and white), 4, 8, 16, 24 (true color, 16.7 million colors) or 32 bits per pixel. Images of 8 bits and fewer can be either grayscale or indexed color mode. More details on the BMP file format can be found at http://en.wikipedia.org/wiki/BMP_file_format.
-
-In this project, we will focus only on the __24-bit uncompressed RGB color mode__ with the "Windows V3" bitmap information header. Under this mode, our target image file has the following structure.
-
-```
-              +-----------------------------------------+
-              |   BMP file header (14 bytes)            |
-              +-----------------------------------------+
-              |   Bitmap information header (40 bytes)  |
-              +-----------------------------------------+
-    imgptr -> |   Bitmap data                           |
-              |                                         |
-              |                                         |
-              |                                         |
-              +-----------------------------------------+
-```
-
-We will provide you with the skeleton code that has only the bitmap data. So you don't have to worry about these headers. 
-
-### Bitmap data format
-
-The bitmap data describes the image, pixel by pixel. Each pixel consists of an 8-bit blue (B) byte, a green (G) byte, and a red (R) byte in that order. __Pixels are stored "upside-down"__ with respect to normal image raster scan order, starting in the lower left corner, going from left to right, and then row by row from the bottom to the top of the image. Note that __the number of bytes occupied by each row should be a multiple of 4__. If that's not the case, the remaining bytes are padded with zeroes. The following figure summarizes the structure of the bitmap data.
-
-![BMP image format](https://github.com/snu-csl/ca-pa3/blob/master/bmpformat.png)
-
-### Image resizing
-
-In this project, we only consider scaling down an image by a factor of 2<sup>k</sup> (k >= 1), where each 2<sup>k</sup> x 2<sup>k</sup> pixels in the original image is replaced by a single pixel. The value of the new pixel is determined by taking an average of the original pixels. The following figure shows an example where the original 4 x 4 image is scaled down by a factor of 2<sup>1</sup>, resulting in an 2 x 2 output image. You can see that the first pixel value of the output image is computed by taking an average of the corresponding 2 x 2 pixel values in the original image. 
-
-Note that each pixel has three color values, namely blue (B), green (G), and red (R). Therefore, in order to generate a pixel in the output image, you need to compute the average value for each color separately.
-
-![image resizing example](https://github.com/snu-csl/ca-pa3/blob/master/resize.png?raw=true)
+Please note that `snurisc5` is slightly different from the 5-stage pipeline described in the textbook. For more information, please refer to [this file](https://github.com/snu-csl/pyrisc/blob/master/pipe5/README.md).
 
 
 ## Problem specification
 
-Complete the file `bmpresize.s` that implements the function `bmpresize()` in the 32-bit RISC-V (RV32I) assembly language. The prototype of `bmpresize()` is as follows:
+This project assignment consists of the following three parts.
+
+## Part 1: Supporting `push` and `pop` instructions (40 points)
+
+The RISC-V ISA is designed to support custom instructions. System architects can add any instruction for the application that they want to accelerate. This is a powerful feature as it allows for a new invention without breaking any software compatibility.
+
+In this project, we want to add two new instructions called `push` and `pop`. Traditionally, these instructions are used to access data in the stack memory. The operations of the `push` and `pop` instructions are defined as follows (`sp` denotes the stack pointer register and `reg` can be any register):
 
 ```
-  void bmpresize (unsigned char *imgptr, int h, int w, int k, 
-		          unsigned char *outptr);
+push reg:  R[sp] <- R[sp] - 4
+           M[R[sp]] <- R[reg]
+
+pop  reg:  R[reg] <- M[R[sp]]
+           R[sp] <- R[sp] + 4
 ```
 
-The first argument, `imgptr` points to the bitmap data that stores the actual image, pixel by pixel. The next two arguments, `h` and `w`, represent the height and the width of the given image in pixels, respectively. The fourth argument `k` is the scaling factor, i.e. the original image is scaled down by 2<sup>k</sup>. The last argument ``outptr`` points to the address of the output image. Note that the pixel data for the input image (indicated by `imgptr`) and the output image (indicated by `outptr`) should follow the same bitmap data format used in the BMP image file. You can assume that a sufficient memory region has been already allocated to store the output image, whose start address is given by `outptr`. For the given `h` x `w` input image, the output image will have the dimension of (`h`/2<sup>k</sup>) x (`w`/2<sup>k</sup>). You need to perform the resizing operation for each color separately. 
+Please note that executing the `pop sp` instruction leads to an undefined result and should be avoided, while `push sp` is a valid instruction.
 
-To make the problem simpler, you can assume the followings:
-  
-- `k` is an integer larger than zero
-- `h` >= 2<sup>k</sup> and `w` >= 2<sup>k</sup>
-- Both `h` and `w` are the multiple of 2<sup>k</sup>
+Using the `push` and `pop` instructions, function prologue and epilogue needed to save and restore register values can be simplified as shown in the following example. 
 
-In the assembly code, those arguments, `imgptr`, `h`, `w`, `k`, and `outptr`, are available in the `a0`, `a1`, `a2`, `a3,` and `a4` registers, respectively. Because we are using the 32-bit RISC-V simulator, all the registers are 32-bit wide. 
-
-## Restrictions
-
-* You are allowed to use only the following registers in the `bmpresize.s` file: `zero (x0)`, `sp`, `ra`, `a0` ~ `a4`, `t0` ~ `t4`. If you are running out of registers, use stack as temporary storage.
-* The maximum amount of the space you can use in the stack is limited to 128 bytes. Let `A` be the address indicated by the `sp` register at the beginning of the function `bmpresize()`. The valid stack area you can use is from `A - 128` to `A - 1`. You should always access the stack area using the `sp` register such as `sw a0, 16(sp)`.
-* The `lb` and `sb` instructions are not available in the simulator. Therefore, you need to use `lw` and `sw` instructions to access data in memory.
-* The padding area in the output image should be set to the value 0, if any.
-* The contents of the output buffer after the output image should not be corrupted in any case. 
-* You are allowed to define any extra functions inside of the `bmpresize.s` file, if necessary.
-* Your program should finish within a reasonable time. If your code does not finish within a predefined threshold, it will be terminated.
-
-
-## Building RISC-V GCC compiler
-
-In order to compile RISC-V assembly programs, you need to build a cross compiler, i.e. the compiler that generates the RISC-V binary code on the x86-64 or ARM64 machine. To build the RISC-V toolchain on your machine (on either Linux or MacOS), please take the following steps. These instructions are also available in the [README.md](https://github.com/snu-csl/pyrisc/blob/master/README.md) file of the [PyRISC toolset](https://github.com/snu-csl/pyrisc).
-
-### 1. Install prerequisite packages first
-
-#### (1) Ubuntu (or Ubuntu on WSL)
-
-For Ubuntu, perform the following commands to install prerequisite packages:
 ```
-$ sudo apt-get install autoconf automake autotools-dev curl libmpc-dev
-$ sudo apt-get install libmpfr-dev libgmp-dev gawk build-essential bison flex
-$ sudo apt-get install texinfo gperf libtool patchutils bc zlib1g-dev libexpat-dev
+func:  addi  sp, sp, -8           func:  push    ra
+       sw    ra, 4(sp)                   push    s0
+       sw    s0, 0(sp)
+       
+       ...                  =>           ...
+
+       lw    s0, 0(sp)                   pop     s0
+       lw    ra, 4(sp)                   pop     ra
+       addi  sp, sp, 8                   ret
+       ret
 ```
 
-#### (2) MacOS (on x86_64 or ARM64)
+We encode `push` and `pop` instructions as R-type instructions, but with a new opcode `0b1101011`. Both instructions have only one register argument. For `push`, the register number is encoded in the `rs2` field as its value will be written into the memory just like in the `sw` instruction. For `pop`, the register number is encoded in the `rd` field. The below shows how `push x31` and `pop x30` instructions are encoded.
 
-If your machine runs MacOS on x86_64 or ARM64 (Apple Silicon) CPUs, you need the Xcode command line tools. It can be installed as follows:
 ```
-$ sudo xcode-select --install
-```
+# R-type instruction format 
+bits        31...25  24...20  19...15  14...12  11...7    6...0
+             funct7      rs2      rs1   funct3      rd   opcode
 
-Install the `brew` utility as follows.  It allows you to use many famous Linux tools and libraries on MacOS. For more information on `brew`, please refer to https://brew.sh
-```
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Now use the `brew` utility to install the prerequisite packages.
-```
-$ brew install gawk gnu-sed gmp mpfr libmpc isl zlib expat texinfo flock
+push x31:   0000001    11111    00000      000   00000  1101011
+pop  x30:   0000010    00000    00000      000   11110  1101011
 ```
 
-### 2. Download the RISC-V GNU Toolchain from Github
+Your task is to modify the existing 5-stage pipelined processor to support the `push` and `pop` instructions with fully implementing data forwarding wherever necessary. For `push` and `pop` instructions, use the ALU to compute the next `sp` value (`sp + 4` or `sp - 4`). 
+
+There are several things you need to consider.
+
+1. Both `push` and `pop` instructions may also have an implicit dependency on `sp` with the preceding instructions that modify `sp`. In these cases, you have to forward its value as well. 
+
+* Example 1: Implicit dependency on `sp` 
+  ```  
+                         C0  C1  C2  C3  C4  C5  C6  C7  (cycle)
+    lui   sp, 0x80020    IF  ID  EX  MM  WB
+    push  t0                 IF  ID  EX  MM  WB          ; sp forwarded from lui
+    pop   t1                     IF  ID  EX  MM  WB      ; sp forwarded from push
+    ebreak                           IF  ID  EX  MM  WB
+  ```
+      
+2. The `pop` instruction can cause another load-use hazard, where the pipeline should be stalled for one cycle. 
+
+* Example 2: Load-use hazard 
+  ``` 
+                         C0  C1  C2  C3  C4  C5  C6  C7  C8  C9  (cycle)
+    lui   sp, 0x80020    IF  ID  EX  MM  WB
+    push  zero               IF  ID  EX  MM  WB
+    pop   t0                     IF  ID  EX  MM  WB          
+    push  t0                         IF  ID  ID  EX  MM  WB        ; 1-cycle stall       
+    ebreak                               IF  IF  ID  EX  MM  WB
+  ```
+
+3. For `pop`, you need to write back *two* register values, namely `sp` and `rd`, in the WB stage. For this, we provide you with the new register file (`Pipe.cpu.rf`) that has two write ports: `rd` and `rd2` for two register numbers to be written, and `wbdata` and `wbdata2` for their data, respectively. If you specify any non-zero register numbers in both `rd` and `rd2`, they will be updated together at the end of the WB stage. If you don't have anything to write in `rd2`, set it to zero. Again, setting both `rd` and `rd2` to the same register number (except zero) results in an undefined behavior. You can assume that our test cases will not include such an instruction as `pop sp`.  
+
+
+## Part 2: Branch prediction with Branch Target Buffer (40 points)
+
+The current pipelined processor uses an __always-not-taken__ branch prediction scheme that naively fetches the next instructions when it encounters a branch instruction. In case the branch is determined to be taken at the EX stage, the wrong instructions in the IF and ID stages should be set to BUBBLEs, wasting two cycles. 
+
+The role of the branch predictor is to increase the chances of fetching the right instruction after a branch or jump instruction. Based on the past history of whether the current branch instruction was previously taken or not, the branch predictor may be able to make a better decision. Your second task is to implement a branch predictor using the branch target buffer (BTB).
+
+Basically, the BTB is a small table inside the processor that caches the recent information on __taken__ branches. Because the BTB predicts the next instruction address and will send it out _before_ decoding the instruction, we must know whether the fetched instruction is predicted as a taken branch. The hardware for BTB is very similar to the hardware for a cache. It has a fixed number of entries and each entry consists of valid bit (V), tag bits (T), and the target address (A) as shown below.
+
+```
+BTB structure:
+     +---+---------+----------------------+ 
+  0  | V | tag (T) |  target address (A)  |
+     +---+---------+----------------------+ 
+  1  |   |         |                      |
+     +---+---------+----------------------+ 
+     |   |   ...   |        ...           |
+     +---+---------+----------------------+ 
+ N-1 |   |         |                      |
+     +---+---------+----------------------+ 
+```
+
+The valid bit indicates whether the corresponding entry has a valid information. Initially, all the entries in the BTB are set to be invalid. The tag bits represent the address of a branch instruction. And the target address has the address to jump when the branch is taken. 
+
+In the IF stage, the instruction memory (imem) and the BTB are accessed simultaneously with the same `pc`. If the `pc` of the fetched instruction matches a tag in the BTB, then it indicates that the instruction is a branch and it was taken previously. In this case, the current branch instruction is also predicted as taken, and the corresponding target address is used as the next `pc`. If the matching entry is not found in the BTB, the current instruction is either (1) a branch instruction which were not taken previously, or (2) not a branch instruction at all. In both cases, the next instruction at `pc` + 4  will be fetched.
+
+The branch outcome is known at the end of the EX stage. If the prediction using the BTB was right, we have nothing to do. When the prediction was wrong, we need to cancel two instructions in the IF and ID stages, and fetch the right instruction. Also, when the branch is predicted to be taken but it was not taken, we should make the corresponding entry in the BTB invalid. Likewise, when the branch is predicted to be not-taken but it was taken, we should add an entry for the current branch instruction to the BTB.
+
+Consider the following things when you implement the BTB.
+
+1. We assume that the BTB always has the power-of-2 (i.e. N = 2<sup>k</sup>, 0 <= k <= 8) entries.
+
+2. The BTB has a direct-mapped organization, where `(pc >> 2) % N` is used as an index. We omit the last 2 bits in the `pc` because they will be always `0b00` (all the instruction addresses are aligned to the 4-byte boundary in `pyrisc`). The remaining bits of the `pc` (i.e. `pc >> (k + 2)`) are used as the tag bits. If the valid bit (`V`) is 1, it indicates a valid entry.
+
+3. We have added a new class named `BTB` in the skeleton code. You need to implement the initialization code as well as `add()` and `remove()` functions. You can refer to the BTB object using the name `Pipe.cpu.btb`. Because of the direct-mapped organization, two or more branch instructions can be mapped to the same entry in the BTB. If the corresponding entry is already occupied by another branch instruction at the time you want to add a new entry, it is simply overwritten with the information of the current branch instruction.
+
+4. You may need to add/remove an entry to/from the BTB in the EX stage when the prediction was wrong. Please make sure you update the BTB inside of the `update(self)` function of the EX stage so that it can be applied to the BTB at the end of the current cycle.
+
+5. It is very difficult to predict the target address of the `jalr` instruction as it depends on a register value. To make the problem simpler, the `jalr` instruction is handled in the same way as in `snurisc5`; the instructions next to the `jalr` instruction are fetched until we have the target address in the EX stage and then the two instructions being executed in the IF and ID stages are converted into BUBBLEs while the target address is forwarded to the next `pc` value immediately. On the other hand, the `jal` instruction can be treated in the same way as the other branch instructions.
+
+The following shows some example scenarios.
+
+* Example 3: For the first `bne` instruction at line 7, the BTB entry is empty. Hence, it is predicted as not-taken and the following `ebreak` instruction is fetched. At `C4`, we know that it is mispredicted, so two instructions at line 11 and 13 are flushed and the `addi` instruction is fetched at `C5` (line 4). Next time we meet the `bne` instruction at line 8, the previous history is available in the BTB and it is predicted as taken, fetching the `addi` instruction immediately at the next cycle at `C7`. On the third execution of the `bne` instruction at `C8`, it will be still predicted as taken, but this is wrong. Again, two instructions at line 6 and 10 are flushed and the `ebreak` instruction is fetched at `C11`.   
+  ```  
+  1                        C0  C1  C2  C3  C4  C5  C6  C7  C8  C9 C10 C11 C12 C13 C14 C15 (cycle)
+  2       li   t0, 3       IF  ID  EX  MM  WB
+  3   L0: addi t0, t0, -1      IF  ID  EX  MM  WB          
+  4                                            IF  ID  EX  MM  WB
+  5                                                    IF  ID  EX  MM  WB
+  6                                                            IF  ID  -   -   -
+  7       bne  t0, x0, L0          IF  ID  EX  MM  WB
+  8                                                IF  ID  EX  MM  WB   
+  9                                                        IF  ID  EX  MM  WB
+  10                                                               IF  -   -   -   - 
+  11      ebreak                       IF  ID  -   -   -
+  12                                                                   IF  ID  EX  MM  WB
+  13      <illegal>                        IF  -   -   -   - 
+   ```
+
+* Example 4: In this example, the `beq` instruction will be mispredicted. But you can see that the instruction at the branch target is actually the same as the next instruction. In this case, you may feel tempted to keep them going instead of making them BUBBLEs. In order to do that, however, you would need another comparator at the EX stage to compare the branch target address with the address of the next instruction. To make the design simpler, we do not consider this optimization. So, whenever a branch is mispredicted, you must cancel two instructions being executed in the IF and ID stages.
+
+  ```  
+  1                        C0  C1  C2  C3  C4  C5  C6  C7  C8  (cycle)
+  2       beq  x0, x0, L0  IF  ID  EX  MM  WB
+  3   L0: li   t0, 1           IF  ID  -   -   -          
+  4                                    IF  ID  EX  MM  WB        
+  5       ebreak                   IF  -   -   -   -
+  6                                        IF  ID  EX  MM  WB
+  ```   
+
+
+## Part 3: Design document (20 points)
+
+You need to prepare and submit the design document (in PDF format) for the modified `snurisc5` processor. If you design the pipeline correctly with satisfying all the above requirements, you will get 20 points even if your implementation does not work. Your design document should answer the following questions.
+
+1. About Part 1: When do the new data hazards occur due to the `push` and `pop` instructions and how do you deal with them? 
+
+ * Show all the possible cases when data hazards can occur and your solutions to them
+ * Explain the changes in the datapath 
+ * Explain the changes in the control signals. You should present how each control signal is generated in detail similar to the descriptions in pp.319-320 in the textbook.
+
+ 2. About Part 2: How do you implement the branch prediction using the BTB?
+
+ * Explain your implementation of the BTB
+ * Explain how you find out that the current branch is mispredicted
+ * Explain how you handle the mispredicted branch
+ * Explain the changes in the datapath
+ * Explain the changes in the control signals. Again, you should present how each control signal is generated in detail.
+
+
+## Adding `push`/`pop` instructions to RISC-V toolchain
+
+You need to rebuild the GNU RISC-V toolchain so that it understands the `push` and `pop` instructions. If you have deleted the source code of the GNU RISC-V toolchain, please download it again from the Github as follows.
 
 ```
 $ git clone --recursive https://github.com/riscv/riscv-gnu-toolchain
 ```
 
-### 3. Configure the RISC-V GNU toolchain
+There is a patch file named `pushpop.patch` in the `patch` directory of the skeleton code. Move the file into the `riscv-gnu-toolchain` directory and perform the following command. This will update `./binutils/include/opcode/riscv-opc.h` and `./binutils/opcodes/riscv-opc.c` files. (The following assumes that `ca-pa4` and `riscv-gnu-toolchain` directories exist in your home directory.)
+```
+$ cp ~/ca-pa4/patch/pushpop.patch ~/riscv-gnu-toolchain
+$ cd ~/riscv-gnu-toolchain
+$ patch -p1 < ./pushpop.patch
+```
+
+Now you can build the toolchain as before.
 
 ```
-$ cd riscv-gnu-toolchain
 $ mkdir build
 $ cd build
 $ ../configure --prefix=/opt/riscv --with-arch=rv32i --disable-gdb
-```
-
-### 4. Compile and install them.
-
-Note that they are installed in the path given as the prefix, i.e. `/opt/riscv` in this example. (Warning: This step may take some time.) 
-
-```
 $ sudo make
 ```
 
-For MacOS, if errors occur due to `PATH` or `linking`, please compile after setting up symbolic links from `/usr/local` to  `/usr/homebrew` as follows.
-
-```
-$ sudo ln -s /opt/homebrew/bin /usr/local/bin  
-$ sudo ln -s /opt/homebrew/include /usr/local/include  
-$ sudo ln -s /opt/homebrew/lib /usr/local/lib  
-```
-
-### 5. Add the directory `/opt/riscv/bin` in your `PATH`
-
-```
-$ export PATH=/opt/riscv/bin:$PATH
-```
-
-`PATH` is an environment variable on Linux, specifying a set of directories where executable programs are located. When a command name is specified by the user, the system searches through `$PATH`, examining each directory from left to right in the list, looking for a filename that matches the command name. 
-
-If you don't want to type the above command every time you log in, put it in your `~/.bashrc` or `~/.bash_aliases` file. 
-
-
 ## Skeleton code
 
-We provide you with the skeleton code for this project. It can be downloaded from Github at https://github.com/snu-csl/ca-pa3/.
-
-To download and build the skeleton code, please follow these steps:
+We provide you with the skeleton code that can be downloaded from https://github.com/snu-csl/ca-pa4. To download the skeleton code, please take the following step:
 
 ```
-$ git clone https://github.com/snu-csl/ca-pa3.git
-$ cd ca-pa3
-$ make
-riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize-main.s -o bmpresize-main.o
-riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize.s -o bmpresize.o
-riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize-test.s -o bmpresize-test.o
-riscv32-unknown-elf-gcc -T./link.ld -nostdlib -nostartfiles -o bmpresize bmpresize-main.o bmpresize.o bmpresize-test.o
+$ git clone https://github.com/snu-csl/ca-pa4.git
 ```
 
-## Running your RISC-V executable file
+It is basically the same as the 5-stage pipelined simulator (`snurisc5`) available in the [PyRISC project](https://github.com/snu-csl/pyrisc). Please refer to the [snurisc5.pdf](https://github.com/snu-csl/pyrisc/blob/master/pipe5/snurisc5.pdf) file for the current pipeline structure of the `snurisc5` simulator. We have slightly changed the simulator structure so that you only need to modify the `stages.py` file. Currently, the instruction encodings and masks for `push` and `pop` instructions are already added to the ISA table in `isa.py` as shown below. However, the datapath and the control logic cannot handle those instructions yet. 
 
-The executable file generated by `riscv32-unknown-elf-gcc` should be run in the RISC-V machine. In this project, we provide you with a RISC-V instruction set simulator written in Python, called __snurisc__. It is available at the separate Github repository at https://github.com/snu-csl/pyrisc. You can install it by performing the following command. 
-```
-$ git clone https://github.com/snu-csl/pyrisc
-```
-
-To run your RISC-V executable file, you need to modify the `./ca-pa3/Makefile` so that it can find the __snurisc__ simulator. In the `Makefile`, there is a variable called `PYRISC`. By default, it was set to `../pyrisc/sim/snurisc.py`. For example, if you have downloaded PyRISC in `/dir1/dir2/pyrisc`, set `PYRISC` to `/dir1/dir2/pyrisc/sim/snurisc.py`.
+You may find the [GUIDE.md](https://github.com/snu-csl/pyrisc/blob/master/pipe5/GUIDE.md) in the PyRISC project useful, which describes the overall architecture and implementation details of the `snurisc5` simulator.
 
 ```
-...
+# Instruction Encodings
+PUSH        = WORD(0b00000010000000000000000001101011)  
+POP         = WORD(0b00000100000000000000000001101011)  
 
-PREFIX      = riscv32-unknown-elf-
-CC          = $(PREFIX)gcc
-CXX         = $(PREFIX)g++
-AS          = $(PREFIX)as
-OBJDUMP     = $(PREFIX)objdump
+# Instruction Masks
+PUSH_MASK   = WORD(0b11111110000000000111000001111111)
+POP_MASK    = WORD(0b11111110000000000111000001111111)
 
-PYRISC      = /dir1/dir2/pyrisc/sim/snurisc.py      # <-- Change this line
-PYRISCOPT   = -l 1                                  # <-- Change for log level
-
-INCDIR      =
-LIBDIR      =
-LIBS        =
-
-...
-```
-
-Now you can run `bmpresize`, by performing `make run`. The result of a sample run using the __snurisc__ simulator looks like this:
+# ISA table
+PUSH    : [ "push",     PUSH_MASK,  R_TYPE,   CL_MEM,   ]
+POP     : [ "pop",      POP_MASK,   R_TYPE,   CL_MEM,   ]
 
 ```
-$ make run
-/dir1/dir2/pyrisc/sim/snurisc.py   -l 1 bmpresize
-Loading file bmpresize
-Execution completed
-Registers
-=========
-zero ($0): 0x00000000    ra ($1):   0x800001b8    sp ($2):   0x80017ffc    gp ($3):   0x00000000
-tp ($4):   0x00000000    t0 ($5):   0x000005a0    t1 ($6):   0x4c000000    t2 ($7):   0x00000000
-s0 ($8):   0x00000000    s1 ($9):   0x00000003    a0 ($10):  0x80012d2c    a1 ($11):  0x00000000
-a2 ($12):  0x000000bc    a3 ($13):  0x80017ff0    a4 ($14):  0x8001aa30    a5 ($15):  0x00000000
-a6 ($16):  0x00000000    a7 ($17):  0x00000000    s2 ($18):  0x80010008    s3 ($19):  0x80010018
-s4 ($20):  0x80018020    s5 ($21):  0x80012f24    s6 ($22):  0x80015934    s7 ($23):  0x80018000
-s8 ($24):  0x00000000    s9 ($25):  0x00000000    s10 ($26): 0x00000000    s11 ($27): 0x00000000
-t3 ($28):  0x00000000    t4 ($29):  0x00000000    t5 ($30):  0x80018020    t6 ($31):  0x00000003
-1945220 instructions executed in 1945220 cycles. CPI = 1.000
-Data transfer:    448930 instructions (23.08%)
-ALU operation:    1180661 instructions (60.70%)
-Control transfer: 315629 instructions (16.23%)
-```
 
-If the value of the `t6` (or `x31`) register is nonzero, it means that your program has failed to pass all test cases.  If you failed a test case, it will stop running and the index of the test case will be stored in `t6`. The memory address of the first incorrect word will be stored in `t5`. For example, if the value of `t6` is equal to 0x00000003, it means that your program passed test 1 and 2, but didn't pass test 3. If the value of `t5` is equal to 0x80018020, it means that your program has failed to match the value of the answer output at the memory address 0x80018020.
-
-Please note that the simulator `snurisc.py` has the ability to show various log information. For example, if you specify the log level 3 (`-l 3`), you can see each instruction executed by the simulator as shown below.
+Several RISC-V executable files, such as `fib`, `sum100 `, `forward`, `branch`, `loaduse`, `ex1`, `ex2`, `ex3`, and `ex4`, are available in the `./asm` directory of the skeleton code. In particular, `ex1`, `ex2`, `ex3`, and `ex4` programs are the ones explained in Example 1-4 of this document. You can test your simulator with these programs. Also, it is highly recommended to write your own test programs to see how your simulator works. Use the log level 4 as follows if you want to examine what's happening in the pipeline in each cycle. Also, you can change the size of the BTB using the `-b` option. For example, `-b 7` sets the size of the BTB to 2<sup>7</sup> = 128 entries (The default BTB size is set to `k` = 4, i.e. 16 entries).
 
 ```
-/dir1/dir2/pyrisc/sim/snurisc.py   -l 3 bmpresize
-Loading file bmpresize
-0 0x80000000: lui    sp, 0x80018000
-1 0x80000004: jal    ra, 0x8000000c
-2 0x8000000c: addi   sp, sp, -4
-3 0x80000010: sw     ra, 0(sp)
-4 0x80000014: addi   t6, zero, 1
-5 0x80000018: auipc  s2, 0x10000
-6 0x8000001c: addi   s2, s2, -24
-7 0x80000020: auipc  s3, 0x10000
-8 0x80000024: addi   s3, s3, -8
-9 0x80000028: lui    a4, 0x80018000
-10 0x8000002c: lw     a3, 0(s2)
-11 0x80000030: lw     a2, 4(a3)
-12 0x80000034: lw     a1, 8(a3)
-13 0x80000038: addi   a0, a3, 12
-14 0x8000003c: lw     a3, 0(a3)
-15 0x80000040: jal    ra, 0x80000094
-16 0x80000094: jalr   zero, ra, 0
-17 0x80000044: lui    s4, 0x80018000
-18 0x80000048: lw     s5, 0(s3)
-19 0x8000004c: lw     s6, 4(s3)
-20 0x80000050: lw     s7, 0(s4)
-21 0x80000054: lw     s8, 0(s5)
-22 0x80000058: bne    s7, s8, 0x8000008c
-23 0x8000008c: addi   t5, s4, 0
-24 0x80000090: ebreak
-Execution completed
-...
+$ ./snurisc5.py -l 4 -b 7 asm/ex4
 ```
 
-## Hand-in instructions
+## Restrictions
 
-* Submit only the `bmpresize.s` file to the submission server.
+* You should not change any files other than `stages.py`.
 
-* The submitted code will NOT be graded instantly. Instead, it will be graded every 6 hours (12:00am, 6:00am, 12:00pm 6:00pm). You may submit multiple versions, but only the last version will be graded.
+* Your `stages.py` file should not contain any `print()` function even in comment lines. Please remove them before you submit your code to the server.
 
-* If your program contains any register names other than the allowed ones, it will be rejected by the server.
+* You should not introduce unnecessary pipeline stalls.
 
-* Your program will be rejected if it contains such keywords as `.data`, `.octa`, `.quad`, `.long`, `.int`, `.word`, `.short`, `.hword`, `.byte`, `.double`, `.single`, `.float`, etc. 
+* Your code should finish within a reasonable number of of cycles. If your simulator runs beyond the predefined threshold, you will get the `TIMEOUT` error.
 
-* __The top 10 implementations with the smallest code size will receive a 10% extra bonus__. __The next 10 implementations will receive a 5% extra bonus__. The code size is measured by the total number of bytes for the text section of `bmpresize.s`.  You can check the size of your code by the command below.
-  ```
-  $ riscv32-unknown-elf-size bmpresize.o
-    text	 data	    bss	    dec	    hex	filename
-     520	    0	      0	    520	    208	bmpresize.o
-  ```
+
+## Hand in instructions
+
+* Submit only the `stages.py` file to the submission server.
+
+* Also, submit the design document (in PDF file only) to the submission server.
+
+* The submitted code will NOT be graded instantly. Instead, it will be graded every four hours (12:00am, 4:00am, 8:00am, 12:00pm, 4:00pm, 8:00pm). You may submit multiple versions, but only the last version will be graded.
+
+* The `sys` server will be closed at 11:59PM on December 22nd. This is the firm deadline.
 
 
 ## Logistics
 
 * You will work on this project alone.
+
 * Only the upload submitted before the deadline will receive the full credit. 25% of the credit will be deducted for every single day delay.
-* __You can use up to 4 _slip days_ during this semester__. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server after each submission. Saving the slip days for later projects is highly recommended!
+
+* You can use up to 4 slip days during this semester. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server after each submission.
+
 * Any attempt to copy others' work will result in heavy penalty (for both the copier and the originator). Don't take a risk.
 
-Have fun!
+This is the final project. I hope it was fun!
+
 
 [Jin-Soo Kim](mailto:jinsoo.kim_AT_snu.ac.kr)  
 [Systems Software and Architecture Laboratory](http://csl.snu.ac.kr)  

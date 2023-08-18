@@ -1,0 +1,35 @@
+diff -uprN '--exclude=.git' riscv-gnu-toolchain.org/binutils/include/opcode/riscv-opc.h riscv-gnu-toolchain/binutils/include/opcode/riscv-opc.h
+--- riscv-gnu-toolchain.org/binutils/include/opcode/riscv-opc.h	2022-11-15 20:33:28.393145885 +0900
++++ riscv-gnu-toolchain/binutils/include/opcode/riscv-opc.h	2022-11-16 23:21:19.603841153 +0900
+@@ -99,6 +99,10 @@
+ #define MASK_ANDI  0x707f
+ #define MATCH_ADD 0x33
+ #define MASK_ADD  0xfe00707f
++#define MATCH_PUSH 0x200006b
++#define MASK_PUSH 0xfe0fffff
++#define MATCH_POP 0x400006b
++#define MASK_POP 0xfffff07f
+ #define MATCH_SUB 0x40000033
+ #define MASK_SUB  0xfe00707f
+ #define MATCH_SLL 0x1033
+@@ -2520,6 +2524,8 @@
+ #define CSR_VLENB 0xc22
+ #endif /* RISCV_ENCODING_H */
+ #ifdef DECLARE_INSN
++DECLARE_INSN(push, MATCH_PUSH, MASK_PUSH)
++DECLARE_INSN(pop, MATCH_POP, MASK_POP)
+ DECLARE_INSN(slli_rv32, MATCH_SLLI_RV32, MASK_SLLI_RV32)
+ DECLARE_INSN(srli_rv32, MATCH_SRLI_RV32, MASK_SRLI_RV32)
+ DECLARE_INSN(srai_rv32, MATCH_SRAI_RV32, MASK_SRAI_RV32)
+diff -uprN '--exclude=.git' riscv-gnu-toolchain.org/binutils/opcodes/riscv-opc.c riscv-gnu-toolchain/binutils/opcodes/riscv-opc.c
+--- riscv-gnu-toolchain.org/binutils/opcodes/riscv-opc.c	2022-11-15 20:33:28.653145887 +0900
++++ riscv-gnu-toolchain/binutils/opcodes/riscv-opc.c	2022-11-16 23:21:43.583841326 +0900
+@@ -353,6 +353,8 @@ const struct riscv_opcode riscv_opcodes[
+ {"add",         0, INSN_CLASS_I, "d,s,t",     MATCH_ADD, MASK_ADD, match_opcode, 0 },
+ {"add",         0, INSN_CLASS_I, "d,s,t,1",   MATCH_ADD, MASK_ADD, match_opcode, 0 },
+ {"add",         0, INSN_CLASS_I, "d,s,j",     MATCH_ADDI, MASK_ADDI, match_opcode, INSN_ALIAS },
++{"push",        0, INSN_CLASS_I, "t",         MATCH_PUSH, MASK_PUSH, match_opcode, 0 },
++{"pop",         0, INSN_CLASS_I, "d",         MATCH_POP, MASK_POP, match_opcode, 0 },
+ {"la",          0, INSN_CLASS_I, "d,B",       0, (int) M_LA, match_never, INSN_MACRO },
+ {"lla",         0, INSN_CLASS_I, "d,B",       0, (int) M_LLA, match_never, INSN_MACRO },
+ {"la.tls.gd",   0, INSN_CLASS_I, "d,A",       0, (int) M_LA_TLS_GD, match_never, INSN_MACRO },
