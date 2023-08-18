@@ -1,360 +1,287 @@
 # 4190.308 Computer Architecture (Fall 2022)
+# Project #3: Image Resizing in the RISC-V Assembly Language
+### Due: 11:59PM, November 20 (Sunday)
 
-# Project #2: FP Addition
-
-### Due: 11:59PM, October 16 (Sunday)
 
 ## Introduction
 
-The goal of this project is to get familiar with the IEEE 754 floating-point standard by implementing the addition of two floating-point numbers using integer arithmetic. Specificially, this project focuses on a variation of the 16-bit floating-point format, called SnuFloat16 (or `SFP16` for short).
+In this project, you will implement an image resizing program using the 32-bit RISC-V (RV32I) assembly language. An image file in the BMP format will be given as an input. The goal of this project is to give you an opportunity to practice the RISC-V assembly programming. In addition, this project introduces various RISC-V tools that help you compile and run your RISC-V programs.
 
-## SnuFloat16 (or `SFP16`) Representation
+## Backgrounds
 
-`SFP16` is a 16-bit floating-point representation that follows the IEEE 754 standard for floating-point arithmetic. The overall structure of the `SFP16` representation is shown below. The MSB (Most Significant Bit) is used as a sign bit (`S`). The next seven bits are used for the exponent (`E`) with a bias value of 63. The last eight bits are used for the fraction (`F`). The rules for normalized / denormalized values and the representation of zero, infinity, and NaN are all the same as in the IEEE standard. For rounding, we use the **round-to-even** mode.
-```
-bit 15 14 13 12 11 10 9  8  7  6  5  4  3  2  1  0
-    S  E  E  E  E  E  E  E  F  F  F  F  F  F  F  F
-    ^  +--------+--------+  +----------+---------+
-    |           |                      |                       
-Sign bit        |              Fraction (8 bits)
-         Exponent (7 bits)                   
-```
+### RGB color model
 
-Note that the smallest positive number in the `SFP16` format is 0.00000001 x 2<sup>-62</sup> and the largest positive number is 1.11111111 x 2<sup>63</sup>.
+[<img align="right" width="150" src="https://upload.wikimedia.org/wikipedia/commons/c/c2/AdditiveColor.svg?sanitize=true">](https://en.wikipedia.org/wiki/RGB_color_model)
 
-In C, we use a 16-bit unsigned short integer to store the `SFP16` representation. Hence, the new type `SFP16` is defined as follows.
+The RGB color model is one of the most common ways to encode color images in the digital world. The RGB color model is based on the theory that all visible colors can be created using the primary additive colors: red, green, and blue. When two or three of them are combined in different amounts, other colors are produced. The RGB color model is important to graphic design as it is used in computer monitors.
+
+### BMP file format
+
+The BMP file format is an image file format used to store digital images, especially on Microsoft Windows operating systems. A BMP file contains a BMP file header, a bitmap information header, an optional color palette, and an array of bytes that defines the bitmap data. Since the BMP file format has been extended several times, it supports different types of encoding modes. For example, image pixels can be stored with a color depth of 1 (black and white), 4, 8, 16, 24 (true color, 16.7 million colors) or 32 bits per pixel. Images of 8 bits and fewer can be either grayscale or indexed color mode. More details on the BMP file format can be found at http://en.wikipedia.org/wiki/BMP_file_format.
+
+In this project, we will focus only on the __24-bit uncompressed RGB color mode__ with the "Windows V3" bitmap information header. Under this mode, our target image file has the following structure.
 
 ```
-typedef unsigned short SFP16;
+              +-----------------------------------------+
+              |   BMP file header (14 bytes)            |
+              +-----------------------------------------+
+              |   Bitmap information header (40 bytes)  |
+              +-----------------------------------------+
+    imgptr -> |   Bitmap data                           |
+              |                                         |
+              |                                         |
+              |                                         |
+              +-----------------------------------------+
 ```
 
-## FP Addition 
+We will provide you with the skeleton code that has only the bitmap data. So you don't have to worry about these headers. 
 
-This section briefly overviews the required steps for adding two floating-point numbers. Let `x` and `y` be the two `SFP16`-type numbers to be added and `p` be the number of bits allocated for the fraction (i.e., `p` = 8 for the `SFP16` format). The notations E<sub>x</sub> and M<sub>x</sub> are used for the exponent and significand of `x` where M<sub>x</sub> has an explicit leading bit (0 or 1). Likewise, E<sub>y</sub> and M<sub>y</sub> are used for the exponent and significand of `y`. We also use the notation S<sub>x</sub> to represent the sign bit of `x` which is either 0 or 1. For example, when `x` has the bit pattern of `0b0100100111010010` (= 1.11010010 x 2<sup>10</sup>), M<sub>x</sub> = 1.11010010, E<sub>x</sub> = 10, and S<sub>x</sub> = 0. Therefore, the value of `x` can be represented as `x` = (-1)<sup>S<sub>x</sub></sup> * M<sub>x</sub> * 2<sup>E<sub>x</sub></sup>. 
+### Bitmap data format
 
-1. If `|x|` < `|y|`, swap the operands. This ensures that the difference of the exponents satisfies `d` = E<sub>x</sub> - E<sub>y</sub> >= 0. In case `d` == 0 (i.e. E<sub>x</sub> == E<sub>y</sub>), this also ensures M<sub>x</sub> >= M<sub>y</sub>. 
+The bitmap data describes the image, pixel by pixel. Each pixel consists of an 8-bit blue (B) byte, a green (G) byte, and a red (R) byte in that order. __Pixels are stored "upside-down"__ with respect to normal image raster scan order, starting in the lower left corner, going from left to right, and then row by row from the bottom to the top of the image. Note that __the number of bytes occupied by each row should be a multiple of 4__. If that's not the case, the remaining bytes are padded with zeroes. The following figure summarizes the structure of the bitmap data.
 
-2. Shift right M<sub>y</sub> by `d` bits and increment E<sub>y</sub> by `d` so that E<sub>y</sub> == E<sub>x</sub>.
+![BMP image format](https://github.com/snu-csl/ca-pa3/blob/master/bmpformat.png)
 
-3. If the signs of `x` and `y` are same, compute a preliminary significand `M` by adding M<sub>y</sub> to M<sub>x</sub> using the integer arithmetic. If the signs of `x` and `y` are different, subtract M<sub>y</sub> from M<sub>x</sub>. Also, set the exponent `E` and the sign bit `S` of the result such that `E` = E<sub>x</sub> and `S` = S<sub>x<sub>.
+### Image resizing
 
-4. Normalize the preliminary significand `M` by shifting left or right until there is only one non-zero bit before the binary point. As you shift `M` to the right by one bit, you need to increment `E` by one. When you shift left `M` to the left by one bit, `E` should be decremented by one. Note that sometimes `M` should be represented as a denormalized form in which case there will be 0 before the binary point.
+In this project, we only consider scaling down an image by a factor of 2<sup>k</sup> (k >= 1), where each 2<sup>k</sup> x 2<sup>k</sup> pixels in the original image is replaced by a single pixel. The value of the new pixel is determined by taking an average of the original pixels. The following figure shows an example where the original 4 x 4 image is scaled down by a factor of 2<sup>1</sup>, resulting in an 2 x 2 output image. You can see that the first pixel value of the output image is computed by taking an average of the corresponding 2 x 2 pixel values in the original image. 
 
-5. After the normalization, if `M` has any non-zero bits beyond `p` bits after the binary point, it should be rounded according to the __rounding-to-even__ mode.
+Note that each pixel has three color values, namely blue (B), green (G), and red (R). Therefore, in order to generate a pixel in the output image, you need to compute the average value for each color separately.
 
-6. As a result of the rounding, it is possible that `M` is no longer in a normalized form, in which case you need to perform the normalization and rounding again.
+![image resizing example](https://github.com/snu-csl/ca-pa3/blob/master/resize.png?raw=true)
 
-7. Now the result value will be (-1)<sup>S</sup> * M * 2<sup>E</sup> and encode this value into binary numbers according to the `SFP16` format.
 
-### Example 1
+## Problem specification
 
-Let `x` = 0x17f2 and `y` = 0x154f be the two floating-point numbers in the `SFP16` representation.
-```
-         S EEE EEEE FFFF FFFF                          
-      x: 0 001 0111 1111 0010   Sx = 0, Mx = 1.11110010, Ex = 23 - bias = -40
-      y: 0 001 0101 0100 1111   Sy = 0, My = 1.01001111, Ey = 21 - bias = -42
-```
-
-Since E<sub>y</sub> is smaller than E<sub>x</sub>, M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 2 bits. And then, M<sub>x</sub> and M<sub>y</sub> are added together. 
-
-```                               
-     Mx:  1.1111001000      ; Ex = -40
-   + My:  0.0101001111      ; Ey = -40
-      M: 10.0100010111      ; E  = -40,  S = 0
-```
-
-The result `M` is not in a normalized form. So, `M` is shifted right and the exponent is incremented by 1, such that `M` = 1.00100010111 and `E` = -39.
-
-As `M` has 11 bits after the binary point, we need to truncate the trailing 3 bits (`111`) beyond the `p` (= 8) bits. In this case, we need to round up by adding 1 into the `p`-th bit. 
+Complete the file `bmpresize.s` that implements the function `bmpresize()` in the 32-bit RISC-V (RV32I) assembly language. The prototype of `bmpresize()` is as follows:
 
 ```
-      M: 10.0100010111      ; E  = -40 
-      M:  1.00100010111     ; E  = -39  (after normalization)
-      M:  1.00100011        ; E  = -39  (after rounding)
+  void bmpresize (unsigned char *imgptr, int h, int w, int k, 
+		          unsigned char *outptr);
 ```
 
-Now we encode the result `M` and `E` according to the `SFP16` representation. (`f` indicates the fraction bits and `e` is the exponent value after adding the bias.)
+The first argument, `imgptr` points to the bitmap data that stores the actual image, pixel by pixel. The next two arguments, `h` and `w`, represent the height and the width of the given image in pixels, respectively. The fourth argument `k` is the scaling factor, i.e. the original image is scaled down by 2<sup>k</sup>. The last argument ``outptr`` points to the address of the output image. Note that the pixel data for the input image (indicated by `imgptr`) and the output image (indicated by `outptr`) should follow the same bitmap data format used in the BMP image file. You can assume that a sufficient memory region has been already allocated to store the output image, whose start address is given by `outptr`. For the given `h` x `w` input image, the output image will have the dimension of (`h`/2<sup>k</sup>) x (`w`/2<sup>k</sup>). You need to perform the resizing operation for each color separately. 
 
-```
-         S EEE EEEE FFFF FFFF                          
-    x+y: 0 001 1000 0010 0011    ; S = 0, f = 00100011, e = -39 + bias = 24
-         = 0x1823
-````
-    
-### Example 2 
+To make the problem simpler, you can assume the followings:
+  
+- `k` is an integer larger than zero
+- `h` >= 2<sup>k</sup> and `w` >= 2<sup>k</sup>
+- Both `h` and `w` are the multiple of 2<sup>k</sup>
 
-Let's look at another example where `x` = 0x8b00 and `y` = 0x0100. 
-
-```
-         S EEE EEEE FFFF FFFF                          
-      x: 1 000 1011 0000 0000   Sx = 1, Mx = 1.00000000, Ex = 11 - bias = -52
-      y: 0 000 0001 0000 0000   Sy = 0, My = 1.00000000, Ey = 1 - bias = -62
-```
-
-Similar to the previous example, M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 10 bits. Since the signs of two input values differ, we need to subtract M<sub>y</sub> from M<sub>x</sub>. The sign of the result `S` will follow that of `x`, i.e., `S` = S<sub>x</sub> = 1. 
-
-```                              
-     Mx:  1.0000000000        ; Ex = -52
-   - My:  0.0000000001        ; Ey = -52
-      M:  0.1111111111        ; E  = -52, S = 1
-```
-
-Since the result `M` is not in a normalized form, `M` is shifted left by one bit and `E` is decremented by one, such that `M` = 1.111111111 and `E` = -53.
-
-Now we perform the rounding. In this case, 1.111111111 is located in the middle of 1.11111111 and (1.11111111 + 0.00000001 or 10.00000000) and we need to round up to the even number 10.00000000 according to the round-to-even mode.
-
-As a result of this rounding, `M` is no longer in a normalized form and we have to normalize `M` again as follows.
-
-```
-      M:  0.1111111111        ; E  = -52
-      M:  1.111111111         ; E  = -53  (after normalization)
-      M: 10.00000000          ; E  = -53  (after rounding)
-      M:  1.00000000          ; E  = -52  (after re-normalization)
-```
-
-You can see that the final result of the addition is actually same as `x`.
-
-```
-         S EEE EEEE FFFF FFFF                          
-    x+y: 1 000 1011 0000 0000    ; S = 1, f = 11011110, e = -52 + bias = 11
-         = 0x8b00
-````
-
-## FP Addition using Guard, Round, and Sticky Bits
-
-Typically, a floating-point operation takes two inputs `x` and `y` with `p` bits of fraction and returns a `p`-bit result. The ideal algorithm would compute this by first performing the operation exactly, and then rounding the result to `p` bits. The floating-point addition algorithm presented in the previous section follows this strategy. In this case, however, we need a very wide adder and also very long registers to compute and keep the intermediate result. This is true especially when the difference (`d`) in the exponents of the two inputs is very large because the smaller value should be shifted to the right by `d` bits.
-
-Fortunately, we can produce the same result by maintaining only three extra bits, namely guard (G), round (R), and sticky (S) bits. These bits are added (or subtracted) together along with the other `p` bits, and they are also used for normalization and rounding. The floating-point addition with the guard, round, and sticky bits is proceeded as follows.
-
-1. If `|x|` < `|y|`, swap the operands. 
-
-2. Now we extend M<sub>x</sub> and M<sub>y</sub> to include the extra three bits (G, R, and S bits) after the `p`-bit fraction. Those bits are initialized to zeroes. And then we shift right M<sub>y</sub> by `d` = E<sub>x</sub> - E<sub>y</sub> bits. From the bits shifted out beyond the `p` bits, we set the guard bit to the most significant bit (i.e., (`p`+1)-th bit), the round bit to the next most significant bit (i.e., (`p`+2)-th bit), and sticky bit to the OR of the rest.
-
-3. If the signs of `x` and `y` are same, compute a preliminary significand `M` by adding M<sub>y</sub> to M<sub>x</sub> using the integer arithmetic. If the signs of `x` and `y` are different, subtract M<sub>y</sub> from M<sub>x</sub>. Also, set the exponent `E` and the sign bit `S` of the result such that `E` = E<sub>x</sub> and `S` = S<sub>x<sub>.
-
-4. Normalize the preliminary significand `M`. Whenever `M` is shifted left, those G, R, and S bits are shifted together as if they were part of the normal fraction bits, filling the sticky bit with zero. Likewise, whenever `M` is shifted right during the normalization step, G, R, and S bits are updated as follows (assuming `b` is the new bit shifted out beyond the `p` bits):
-   ```
-      S_bit <- S_bit | R_bit
-      R_bit <- G_bit
-      G_bit <- b
-   ```
-   In any case, the exponent of the result, `E`, should be adjusted accordingly.
-
-5. The next step is to perform rounding. The main role of the guard bit is to fill in the least-significant bit (`p`-th bit) of the result when necessary. Depending on the situation, the original guard bit in the step 3 may have moved to the left or right direction during normalization. But in any case, the role of the guard bit is over after the normalization step. Hence, we adjust the round bit and the sticky bit as follows:
-   ```
-      S_bit <- S_bit | R_bit
-      R_bit <- G_bit
-   ```
-
-   This is because, when it comes to the rounding, what really matters is the discarded bits. We set the round bit to the previous guard bit because it is the first bit among the discarded bits. We also update the sticky bit to include the status of the previous round bit. 
-
-   Using the updated round bit and the sticky bit, we perform rounding according to the round-to-even mode: if (R_bit &and; S_bit) &or; (L_bit &and; R_bit), round up, otherwise round down. (Here, L_bit means the last bit of the fraction, i.e., `p`-th bit.)
-
-6. Perform the normalization and rounding again if necessary.
-
-7. Encode the result into binary numbers according to the `SFP16` format.
-
-
-### Example 1 (revisited)
-
-Let `x` = 0x17f2 and `y` = 0x154f are the two floating-point numbers in the `SFP16` representation.
-```
-         S EEE EEEE FFFF FFFF                          
-      x: 0 001 0111 1111 0010   Sx = 0, Mx = 1.11110010, Ex = 23 - bias = -40
-      y: 0 001 0101 0100 1111   Sy = 0, My = 1.01001111, Ey = 21 - bias = -42
-```
-
-M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 2 bits. And then, M<sub>x</sub> and M<sub>y</sub> are added together. We set the G, R, and S bits as follows:
-
-```                         
-                     GRS      
-     Mx:  1.11110010 000    ; Ex = -40
-   + My:  0.01010011 110    ; Ey = -40
-      M: 10.01000101 110    ; E  = -40,  S = 0
-```
-
-The result `M` is not in a normalized form. So, `M` is shifted right and the exponent is incremented by 1, such that `M` = 1.00100010 (with GRS=111) and `E` = -39.
-
-Now, we perform the rounding by setting the R_bit to 1 (the previous G bit), and the S_bit to 1 (previous R_bit | S_bit). This is a round-up condition, so we add 1 into the `p`-th bit.  
-
-```
-                     GRS
-      M: 10.01000101 110    ; E  = -40 
-      M:  1.00100010 111    ; E  = -39  (after normalization)
-                     RS
-      M:  1.00100010 11     ; E  = -39  (update RS for rounding)
-      M:  1.00100011        ; E  = -39  (after rounding)
-```
-
-Now we encode the result `M` and `E` according to the `SFP16` representation. (`f` indicates the fraction bits and `e` is the exponent value after adding the bias.)
-
-```
-         S EEE EEEE FFFF FFFF                          
-    x+y: 0 001 1000 0010 0011    ; S = 0, f = 00100011, e = -39 + bias = 24
-         = 0x1823
-````
-
-   
-### Example 2 (revisited)
-
-Let's look at the previous example again where `x` = 0x8b00 and `y` = 0x0100. 
-
-```
-         S EEE EEEE FFFF FFFF                          
-      x: 1 000 1011 0000 0000   Sx = 1, Mx = 1.00000000, Ex = 11 - bias = -52
-      y: 0 000 0001 0000 0000   Sy = 0, My = 1.00000000, Ey = 1 - bias = -62
-```
-
-M<sub>y</sub> is shifted to the right by E<sub>x</sub> - E<sub>y</sub> = 10 bits, setting the G, R, and S bits accordingly.  Since the signs of two input values differ, we need to subtract M<sub>y</sub> from M<sub>x</sub> in this case. The sign of the result `S` will follow that of `x`, i.e., `S` = S<sub>x</sub> = 1. 
-
-```                   
-                     GRS           
-     Mx:  1.00000000 000      ; Ex = -52
-   - My:  0.00000000 010      ; Ey = -52
-      M:  0.11111111 110      ; E  = -52, S = 1
-```
-
-Since the result `M` is not in a normalized form, the guard bit is moved into the fraction, decrementing `E` by one, such that `M` = 1.11111111 (with GRS=100) and `E` = -53.
-
-For rounding, we update the R_bit to 1 and the S_bit to 0. Because (L_bit &and; R_bit) is true, we round up making `M` = 10.00000000 with `E` = -53. After renormalization, we get `M` = 1.00000000 and `E` = -52. 
-
-```
-                     GRS
-      M:  0.11111111 110      ; E  = -52
-      M:  1.11111111 100      ; E  = -53  (after normalization)
-                     RS
-      M:  1.11111111 10       ; E  = -53  (update RS for rounding)
-      M: 10.00000000          ; E  = -53  (after rounding)
-      M:  1.00000000          ; E  = -52  (after re-normalization)
-```
-
-The final result is encoded as follows:
-
-```
-         S EEE EEEE FFFF FFFF                          
-    x+y: 1 000 1011 0000 0000    ; S = 1, f = 11011110, e = -52 + bias = 11
-         = 0x8b00
-````
-
-## Problem Specification
-
-Your task is to implement the following C function `fpadd()` that returns the sum (`x` + `y`) of the two floating-point numbers, `x` and `y`, represented in the `SFP16` format. The return value should be also represented in the `SFP16` format. Any of the input can be a negative value.
-
-```
-typedef unsigned short SFP16;
-SFP16 fpadd(SPF16 x, SPF16 y);
-```
-
-* Your implementation should make use of the three extra bits (guard, round, and sticky bits) without retaining the unnecessary fraction bits.
-
-* We do not distinguish between +0 and -0. When the result is zero, you can return any bit pattern corresponding to +0 (0x0000) or -0 (0x8000).
-
-* For NaN (Not-a-Number), we only allow the bit pattern where the fractional part is 0b00000001. Hence, +NaN and -NAN are encoded as 0x7f01 and 0xff01, respectively. When one of the inputs is NaN, you can assume that it has the bit pattern of 0x7f01 or 0xff01, and nothing else. 
-
-* We do not distinguish between +NaN and -NaN. When the result is NaN, you can return any of them. 
-
-* We DO however distinguish between +inf (0x7f00) and -inf (0xff00). When the result becomes too large to be represented, it should be converted to either +inf or -inf depending on its sign. 
-
-* For special cases where +inf/-inf, +0/-0, and +NaN/-NAN are involved, the return value should be the same as the one shown in the following table.
-
-   ```
-        y:    +inf   -inf    nan    zero   other
-    x:     
-     +inf     +inf    nan    nan    +inf   +inf
-     -inf      nan   -inf    nan    -inf   -inf
-      nan      nan    nan    nan     nan    nan
-      zero    +inf   -inf    nan     zero
-      other   +inf   -inf    nan
-   ```
-
-## Skeleton code
-
-We provide you with the skeleton code for this project. It can be download from Github at https://github.com/snu-csl/ca-pa2/. To download and build the skeleton code, please follow these steps:
-
-```
-$ git clone https://github.com/snu-csl/ca-pa2.git
-$ cd ca-pa2
-$ make
-gcc -g -O2 -Wall   -c -o pa2.o pa2.c
-gcc -g -O2 -Wall   -c -o pa2-test.o pa2-test.c
-gcc -o pa2 pa2.o pa2-test.o
-```
-
-The result of a sample run looks like this:
-
-```
-$ ./pa2
--------- NORM + NORM --------
-test 0: Wrong
-test 1: Wrong
-test 2: Wrong
-test 3: Wrong
--------- NORM + DENORM ------
-test 0: Wrong
-test 1: Wrong
-test 2: Wrong
-test 3: Wrong
------- DENORM + DENORM ------
-test 0: Wrong
-test 1: Wrong
-test 2: Wrong
-test 3: Wrong
---------- INF / NAN ---------
-test 0: Wrong
-test 1: Wrong
-test 2: Wrong
-test 3: Wrong
-```
-
-You are required to complete the `fpadd()` function in the `pa2.c` file.
-
-## Grading Guideline
-
-The following shows the types of test cases and their relative points during grading. 
-
-* Normal + Normal values
-  * Addition (15 points)
-  * Subtraction (15 points)
-* Denormal + Denormal values
-  * Addition (15 points)
-  * Subtraction (15 points) 
-* Normal + Denormal values
-  * Addition (15 points)
-  * Subtraction (15 points)
-* Handling of special values (10 points)
-
+In the assembly code, those arguments, `imgptr`, `h`, `w`, `k`, and `outptr`, are available in the `a0`, `a1`, `a2`, `a3,` and `a4` registers, respectively. Because we are using the 32-bit RISC-V simulator, all the registers are 32-bit wide. 
 
 ## Restrictions
 
-- You are not allowed to use any array.
-- You are not allowed to use floating-point data types such as `float` and `double`.
-- You are not allowed to use any integer data type whose bit width is greater than 16 bits (e.g., `int`, `long`, `long long` etc.).
-- If your implementation violates the intention of this project assignment, you will get penalty (e.g., simulating an array using a bunch of local or global variables, etc.).
-- The following is the list of symbols and keywords that are not allowed. Any source file that contains one or more of them (even in the comment lines) will be rejected by the server.
-   ```
-   [, ], int, long, float, double, struct, union, static
-   ``` 
-- Do not include any header file in the `pa2.c` file.
-- Your `pa2.c` file should not contain any external library functions including `printf()`. Please remove them before you submit your code to the server.
-- Your code should finish within a reasonable time. We will measure the time to perform a certain number of operations. If your code does not finish within a predefined threshold (e.g., 5 sec), it will be killed.
+* You are allowed to use only the following registers in the `bmpresize.s` file: `zero (x0)`, `sp`, `ra`, `a0` ~ `a4`, `t0` ~ `t4`. If you are running out of registers, use stack as temporary storage.
+* The maximum amount of the space you can use in the stack is limited to 128 bytes. Let `A` be the address indicated by the `sp` register at the beginning of the function `bmpresize()`. The valid stack area you can use is from `A - 128` to `A - 1`. You should always access the stack area using the `sp` register such as `sw a0, 16(sp)`.
+* The `lb` and `sb` instructions are not available in the simulator. Therefore, you need to use `lw` and `sw` instructions to access data in memory.
+* The padding area in the output image should be set to the value 0, if any.
+* The contents of the output buffer after the output image should not be corrupted in any case. 
+* You are allowed to define any extra functions inside of the `bmpresize.s` file, if necessary.
+* Your program should finish within a reasonable time. If your code does not finish within a predefined threshold, it will be terminated.
 
 
-## Hand in instructions
+## Building RISC-V GCC compiler
 
-- Submit only the `pa2.c` file to the submission server.
+In order to compile RISC-V assembly programs, you need to build a cross compiler, i.e. the compiler that generates the RISC-V binary code on the x86-64 or ARM64 machine. To build the RISC-V toolchain on your machine (on either Linux or MacOS), please take the following steps. These instructions are also available in the [README.md](https://github.com/snu-csl/pyrisc/blob/master/README.md) file of the [PyRISC toolset](https://github.com/snu-csl/pyrisc).
 
-- The submitted code will NOT be graded instantly. Instead, it will be graded twice a day at noon and midnight. You may submit multiple versions, but only the last version submitted before 12:00pm or 12:00am will be graded.
+### 1. Install prerequisite packages first
+
+#### (1) Ubuntu (or Ubuntu on WSL)
+
+For Ubuntu, perform the following commands to install prerequisite packages:
+```
+$ sudo apt-get install autoconf automake autotools-dev curl libmpc-dev
+$ sudo apt-get install libmpfr-dev libgmp-dev gawk build-essential bison flex
+$ sudo apt-get install texinfo gperf libtool patchutils bc zlib1g-dev libexpat-dev
+```
+
+#### (2) MacOS (on x86_64 or ARM64)
+
+If your machine runs MacOS on x86_64 or ARM64 (Apple Silicon) CPUs, you need the Xcode command line tools. It can be installed as follows:
+```
+$ sudo xcode-select --install
+```
+
+Install the `brew` utility as follows.  It allows you to use many famous Linux tools and libraries on MacOS. For more information on `brew`, please refer to https://brew.sh
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Now use the `brew` utility to install the prerequisite packages.
+```
+$ brew install gawk gnu-sed gmp mpfr libmpc isl zlib expat texinfo flock
+```
+
+### 2. Download the RISC-V GNU Toolchain from Github
+
+```
+$ git clone --recursive https://github.com/riscv/riscv-gnu-toolchain
+```
+
+### 3. Configure the RISC-V GNU toolchain
+
+```
+$ cd riscv-gnu-toolchain
+$ mkdir build
+$ cd build
+$ ../configure --prefix=/opt/riscv --with-arch=rv32i --disable-gdb
+```
+
+### 4. Compile and install them.
+
+Note that they are installed in the path given as the prefix, i.e. `/opt/riscv` in this example. (Warning: This step may take some time.) 
+
+```
+$ sudo make
+```
+
+For MacOS, if errors occur due to `PATH` or `linking`, please compile after setting up symbolic links from `/usr/local` to  `/usr/homebrew` as follows.
+
+```
+$ sudo ln -s /opt/homebrew/bin /usr/local/bin  
+$ sudo ln -s /opt/homebrew/include /usr/local/include  
+$ sudo ln -s /opt/homebrew/lib /usr/local/lib  
+```
+
+### 5. Add the directory `/opt/riscv/bin` in your `PATH`
+
+```
+$ export PATH=/opt/riscv/bin:$PATH
+```
+
+`PATH` is an environment variable on Linux, specifying a set of directories where executable programs are located. When a command name is specified by the user, the system searches through `$PATH`, examining each directory from left to right in the list, looking for a filename that matches the command name. 
+
+If you don't want to type the above command every time you log in, put it in your `~/.bashrc` or `~/.bash_aliases` file. 
+
+
+## Skeleton code
+
+We provide you with the skeleton code for this project. It can be downloaded from Github at https://github.com/snu-csl/ca-pa3/.
+
+To download and build the skeleton code, please follow these steps:
+
+```
+$ git clone https://github.com/snu-csl/ca-pa3.git
+$ cd ca-pa3
+$ make
+riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize-main.s -o bmpresize-main.o
+riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize.s -o bmpresize.o
+riscv32-unknown-elf-gcc -c -Og -march=rv32i -mabi=ilp32 -static  bmpresize-test.s -o bmpresize-test.o
+riscv32-unknown-elf-gcc -T./link.ld -nostdlib -nostartfiles -o bmpresize bmpresize-main.o bmpresize.o bmpresize-test.o
+```
+
+## Running your RISC-V executable file
+
+The executable file generated by `riscv32-unknown-elf-gcc` should be run in the RISC-V machine. In this project, we provide you with a RISC-V instruction set simulator written in Python, called __snurisc__. It is available at the separate Github repository at https://github.com/snu-csl/pyrisc. You can install it by performing the following command. 
+```
+$ git clone https://github.com/snu-csl/pyrisc
+```
+
+To run your RISC-V executable file, you need to modify the `./ca-pa3/Makefile` so that it can find the __snurisc__ simulator. In the `Makefile`, there is a variable called `PYRISC`. By default, it was set to `../pyrisc/sim/snurisc.py`. For example, if you have downloaded PyRISC in `/dir1/dir2/pyrisc`, set `PYRISC` to `/dir1/dir2/pyrisc/sim/snurisc.py`.
+
+```
+...
+
+PREFIX      = riscv32-unknown-elf-
+CC          = $(PREFIX)gcc
+CXX         = $(PREFIX)g++
+AS          = $(PREFIX)as
+OBJDUMP     = $(PREFIX)objdump
+
+PYRISC      = /dir1/dir2/pyrisc/sim/snurisc.py      # <-- Change this line
+PYRISCOPT   = -l 1                                  # <-- Change for log level
+
+INCDIR      =
+LIBDIR      =
+LIBS        =
+
+...
+```
+
+Now you can run `bmpresize`, by performing `make run`. The result of a sample run using the __snurisc__ simulator looks like this:
+
+```
+$ make run
+/dir1/dir2/pyrisc/sim/snurisc.py   -l 1 bmpresize
+Loading file bmpresize
+Execution completed
+Registers
+=========
+zero ($0): 0x00000000    ra ($1):   0x800001b8    sp ($2):   0x80017ffc    gp ($3):   0x00000000
+tp ($4):   0x00000000    t0 ($5):   0x000005a0    t1 ($6):   0x4c000000    t2 ($7):   0x00000000
+s0 ($8):   0x00000000    s1 ($9):   0x00000003    a0 ($10):  0x80012d2c    a1 ($11):  0x00000000
+a2 ($12):  0x000000bc    a3 ($13):  0x80017ff0    a4 ($14):  0x8001aa30    a5 ($15):  0x00000000
+a6 ($16):  0x00000000    a7 ($17):  0x00000000    s2 ($18):  0x80010008    s3 ($19):  0x80010018
+s4 ($20):  0x80018020    s5 ($21):  0x80012f24    s6 ($22):  0x80015934    s7 ($23):  0x80018000
+s8 ($24):  0x00000000    s9 ($25):  0x00000000    s10 ($26): 0x00000000    s11 ($27): 0x00000000
+t3 ($28):  0x00000000    t4 ($29):  0x00000000    t5 ($30):  0x80018020    t6 ($31):  0x00000003
+1945220 instructions executed in 1945220 cycles. CPI = 1.000
+Data transfer:    448930 instructions (23.08%)
+ALU operation:    1180661 instructions (60.70%)
+Control transfer: 315629 instructions (16.23%)
+```
+
+If the value of the `t6` (or `x31`) register is nonzero, it means that your program has failed to pass all test cases.  If you failed a test case, it will stop running and the index of the test case will be stored in `t6`. The memory address of the first incorrect word will be stored in `t5`. For example, if the value of `t6` is equal to 0x00000003, it means that your program passed test 1 and 2, but didn't pass test 3. If the value of `t5` is equal to 0x80018020, it means that your program has failed to match the value of the answer output at the memory address 0x80018020.
+
+Please note that the simulator `snurisc.py` has the ability to show various log information. For example, if you specify the log level 3 (`-l 3`), you can see each instruction executed by the simulator as shown below.
+
+```
+/dir1/dir2/pyrisc/sim/snurisc.py   -l 3 bmpresize
+Loading file bmpresize
+0 0x80000000: lui    sp, 0x80018000
+1 0x80000004: jal    ra, 0x8000000c
+2 0x8000000c: addi   sp, sp, -4
+3 0x80000010: sw     ra, 0(sp)
+4 0x80000014: addi   t6, zero, 1
+5 0x80000018: auipc  s2, 0x10000
+6 0x8000001c: addi   s2, s2, -24
+7 0x80000020: auipc  s3, 0x10000
+8 0x80000024: addi   s3, s3, -8
+9 0x80000028: lui    a4, 0x80018000
+10 0x8000002c: lw     a3, 0(s2)
+11 0x80000030: lw     a2, 4(a3)
+12 0x80000034: lw     a1, 8(a3)
+13 0x80000038: addi   a0, a3, 12
+14 0x8000003c: lw     a3, 0(a3)
+15 0x80000040: jal    ra, 0x80000094
+16 0x80000094: jalr   zero, ra, 0
+17 0x80000044: lui    s4, 0x80018000
+18 0x80000048: lw     s5, 0(s3)
+19 0x8000004c: lw     s6, 4(s3)
+20 0x80000050: lw     s7, 0(s4)
+21 0x80000054: lw     s8, 0(s5)
+22 0x80000058: bne    s7, s8, 0x8000008c
+23 0x8000008c: addi   t5, s4, 0
+24 0x80000090: ebreak
+Execution completed
+...
+```
+
+## Hand-in instructions
+
+* Submit only the `bmpresize.s` file to the submission server.
+
+* The submitted code will NOT be graded instantly. Instead, it will be graded every 6 hours (12:00am, 6:00am, 12:00pm 6:00pm). You may submit multiple versions, but only the last version will be graded.
+
+* If your program contains any register names other than the allowed ones, it will be rejected by the server.
+
+* Your program will be rejected if it contains such keywords as `.data`, `.octa`, `.quad`, `.long`, `.int`, `.word`, `.short`, `.hword`, `.byte`, `.double`, `.single`, `.float`, etc. 
+
+* __The top 10 implementations with the smallest code size will receive a 10% extra bonus__. __The next 10 implementations will receive a 5% extra bonus__. The code size is measured by the total number of bytes for the text section of `bmpresize.s`.  You can check the size of your code by the command below.
+  ```
+  $ riscv32-unknown-elf-size bmpresize.o
+    text	 data	    bss	    dec	    hex	filename
+     520	    0	      0	    520	    208	bmpresize.o
+  ```
+
 
 ## Logistics
 
-- You will work on this project alone.
-- Only the upload submitted before the deadline will receive the full credit. 25% of the credit will be deducted for every single day delay.
-- **You can use up to 4 *slip days* during this semester**. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server after each submission. Saving the slip days for later projects is highly recommended!
-- Any attempt to copy others’ work will result in heavy penalty (for both the copier and the originator). Don’t take a risk.
-
-## Reference
-
-[1] David Goldberg, "Appendix J: Computer Arithmetic," _Computer Architecture: A Quantitative Approach_, 6th Edition, Morgan Kaufmann, 2019.
+* You will work on this project alone.
+* Only the upload submitted before the deadline will receive the full credit. 25% of the credit will be deducted for every single day delay.
+* __You can use up to 4 _slip days_ during this semester__. If your submission is delayed by 1 day and if you decided to use 1 slip day, there will be no penalty. In this case, you should explicitly declare the number of slip days you want to use in the QnA board of the submission server after each submission. Saving the slip days for later projects is highly recommended!
+* Any attempt to copy others' work will result in heavy penalty (for both the copier and the originator). Don't take a risk.
 
 Have fun!
 

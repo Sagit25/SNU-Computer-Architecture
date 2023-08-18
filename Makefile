@@ -2,10 +2,10 @@
 #
 #  4190.308 Computer Architecture (Fall 2022)
 #
-#  Project #2: SFP16 (16-bit floating point) Adder
+#  Project #3: Image Resizing in RISC-V Assembly
 #
-#  October 4, 2022
-#
+#  November 20, 2022
+# 
 #  Seongyeop Jeong (seongyeop.jeong@snu.ac.kr)
 #  Jaehoon Shim (mattjs@snu.ac.kr)
 #  IlKueon Kang (kangilkueon@snu.ac.kr)
@@ -17,16 +17,44 @@
 #
 #----------------------------------------------------------------
 
-TARGET	= pa2
-SRCS	= pa2.c pa2-test.c
-CC	= gcc
-CFLAGS	= -g -O2 -Wall
-OBJS	= $(SRCS:.c=.o)
+PREFIX		= riscv32-unknown-elf-
+CC		= $(PREFIX)gcc
+CXX		= $(PREFIX)g++
+AS		= $(PREFIX)as
+OBJDUMP		= $(PREFIX)objdump
+
+PYRISC		= ../pyrisc/sim/snurisc.py      # <-- Change this line
+PYRISCOPT	= -l 5
+
+INCDIR		=
+LIBDIR		=
+LIBS		=
+
+CFLAGS		= -Og -march=rv32i -mabi=ilp32 -static 
+ASLFAGS		= -march=rv32i -mabi=ilp32 -static
+LDFLAGS		= -T./link.ld -nostdlib -nostartfiles
+OBJDFLAGS	= -D --section=.text --section=.data
+
+TARGET		= bmpresize
+ASRCS		= bmpresize-main.s bmpresize.s bmpresize-test.s
+OBJS		= $(ASRCS:.s=.o)
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^
+	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS) $(LIBDIR) $(LIBS)
+
+.s.o:
+	$(CC) -c $(CFLAGS) $(INCDIR) $< -o $@
+
+#.c.s:
+#	$(CC) $(CFLAGS) $(INCDIR) -S $< -o $@
+
+objdump: $(TARGET)
+	$(OBJDUMP) $(OBJDFLAGS) $(TARGET) > $(TARGET).objdump
+
+run: $(TARGET)
+	$(PYRISC) $(PYRISCOPT) $(TARGET)
 
 clean:
-	$(RM) $(TARGET) $(OBJS)
+	$(RM) $(TARGET) $(TARGET).objdump $(OBJS) *~ a.out
