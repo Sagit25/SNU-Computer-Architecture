@@ -1,4 +1,4 @@
-# SNU-CA-2022F
+# SNU-Computer-Architecture
 2022 Fall Computer Architecture course project (SNU CSE)
 
 Prof: JinSoo Kim
